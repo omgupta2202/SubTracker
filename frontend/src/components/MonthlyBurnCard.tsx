@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Subscription, EMI, CreditCard } from "@/types";
 import { formatINR } from "@/lib/utils";
-import { Flame, ChevronDown, ChevronUp } from "lucide-react";
+import { Flame, ChevronDown, ChevronUp, TrendingUp, TrendingDown } from "lucide-react";
 import { EditableRow, IField, IGrid, iCls, ISaveCancel } from "./InlineEdit";
 import * as api from "@/services/api";
 
@@ -9,6 +9,10 @@ interface Props {
   subscriptions: Subscription[];
   emis: EMI[];
   cards: CreditCard[];
+  /** Ledger-derived total monthly burn from /api/dashboard/summary */
+  monthlyBurn?: number;
+  /** Month-over-month trend percentage (positive = higher burn than last month) */
+  monthlyBurnTrendPct?: number | null;
   onRefetch: () => void;
 }
 
@@ -18,7 +22,7 @@ function SubRow({ sub, onRefetch }: { sub: Subscription; onRefetch: () => void }
   const [dueDay, setDueDay] = useState(String(sub.due_day));
 
   async function save() {
-    await api.updateSubscription(sub.id, { amount: Number(amount), due_day: Number(dueDay) });
+    await api.updateObligation(sub.id, { amount: Number(amount), due_day: Number(dueDay) });
     setEditing(false); onRefetch();
   }
 
@@ -56,7 +60,7 @@ function EmiRow({ emi, onRefetch }: { emi: EMI; onRefetch: () => void }) {
   const [paid, setPaid] = useState(String(emi.paid_months));
 
   async function save() {
-    await api.updateEmi(emi.id, { amount: Number(amount), paid_months: Number(paid) });
+    await api.updateObligation(emi.id, { amount: Number(amount), completed_installments: Number(paid) });
     setEditing(false); onRefetch();
   }
 
@@ -88,13 +92,18 @@ function EmiRow({ emi, onRefetch }: { emi: EMI; onRefetch: () => void }) {
   );
 }
 
-export function MonthlyBurnCard({ subscriptions, emis, cards, onRefetch }: Props) {
+export function MonthlyBurnCard({ subscriptions, emis, cards, monthlyBurn, monthlyBurnTrendPct, onRefetch }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
 
+  // Use ledger-derived total if available, fall back to computed
   const subTotal  = subscriptions.reduce((s, x) => s + x.amount, 0);
   const emiTotal  = emis.reduce((s, x) => s + x.amount, 0);
   const cardTotal = cards.reduce((s, x) => s + x.minimum_due, 0);
-  const total     = subTotal + emiTotal + cardTotal;
+  const localTotal = subTotal + emiTotal + cardTotal;
+  const total = monthlyBurn ?? localTotal;
+
+  // For bar proportions use local breakdown (ledger total may differ from obligation total)
+  const barBase = Math.max(localTotal, 1);
 
   const sections = [
     { label: "Subscriptions", amount: subTotal, bar: "bg-violet-500", count: subscriptions.length },
@@ -102,16 +111,26 @@ export function MonthlyBurnCard({ subscriptions, emis, cards, onRefetch }: Props
     { label: "Card Min Dues", amount: cardTotal, bar: "bg-emerald-500", count: cards.length },
   ];
 
+  const isLedgerDerived = monthlyBurn !== undefined;
+
   return (
     <div className="bg-zinc-900 p-6 flex flex-col gap-4 backdrop-blur-sm">
-      <div className="flex items-center gap-2 text-zinc-400 text-sm font-medium">
-        <Flame size={16} className="text-violet-400" />
-        Monthly Burn
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-zinc-400 text-sm font-medium">
+          <Flame size={16} className="text-violet-400" />
+          Monthly Burn
+        </div>
+        {monthlyBurnTrendPct !== null && monthlyBurnTrendPct !== undefined && (
+          <span className={`flex items-center gap-0.5 text-xs font-mono font-medium ${monthlyBurnTrendPct > 0 ? "text-red-400" : "text-emerald-400"}`}>
+            {monthlyBurnTrendPct > 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+            {monthlyBurnTrendPct > 0 ? "+" : ""}{monthlyBurnTrendPct}% vs last month
+          </span>
+        )}
       </div>
       <div className="font-mono text-4xl font-bold text-white tracking-tight">{formatINR(total)}</div>
       <div className="flex h-2 rounded-full overflow-hidden gap-0.5">
         {sections.map(s => (
-          <div key={s.label} className={`${s.bar} transition-all`} style={{ width: total > 0 ? `${(s.amount / total) * 100}%` : "0%" }} />
+          <div key={s.label} className={`${s.bar} transition-all`} style={{ width: localTotal > 0 ? `${(s.amount / barBase) * 100}%` : "0%" }} />
         ))}
       </div>
       <div className="flex flex-col gap-1">
@@ -144,6 +163,11 @@ export function MonthlyBurnCard({ subscriptions, emis, cards, onRefetch }: Props
           </div>
         ))}
       </div>
+      {isLedgerDerived && Math.abs(total - localTotal) > 1 && (
+        <p className="text-xs text-zinc-600 italic">
+          Ledger total ({formatINR(total)}) differs from obligation total ({formatINR(localTotal)}) — ledger includes all posted debits.
+        </p>
+      )}
     </div>
   );
 }

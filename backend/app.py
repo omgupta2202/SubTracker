@@ -1,6 +1,31 @@
 """
 SubTracker — Flask application factory.
-All routes live in routes/; business logic in services/.
+
+Route layout:
+  Existing (backward-compatible):
+    /api/subscriptions      legacy; kept for frontend compat
+    /api/emis               legacy; kept for frontend compat
+    /api/cards              legacy; kept for frontend compat
+    /api/accounts           legacy; kept for frontend compat
+    /api/receivables        legacy; kept for frontend compat
+    /api/capex              legacy; kept for frontend compat
+    /api/rent               legacy; kept for frontend compat
+    /api/snapshots          legacy change tracking
+    /api/card-transactions  legacy card transaction management
+    /api/daily-logs         now backed by snapshot_service
+
+  New (ledger architecture):
+    /api/financial-accounts unified accounts + live ledger balances
+    /api/ledger             ledger entry history + reversals
+    /api/payments           payment lifecycle (initiate / settle / fail)
+    /api/obligations        unified subscriptions + EMIs + rent
+    /api/billing-cycles     credit card statement management
+    /api/smart-allocation   ledger-derived allocation plan
+    /api/dashboard          live analytics (burn, gap, utilization)
+
+  Modules:
+    /api/auth               email/password + Google SSO
+    /api/gmail              Gmail OAuth + staged sync pipeline
 """
 import os
 from flask import Flask, request, jsonify
@@ -8,19 +33,30 @@ from flask_cors import CORS
 from flask import g
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt_identity
 
-from routes.subscriptions import bp as subscriptions_bp
-from routes.emis          import bp as emis_bp
-from routes.cards         import bp as cards_bp
-from routes.accounts      import bp as accounts_bp
-from routes.receivables   import bp as receivables_bp
-from routes.capex         import bp as capex_bp
-from routes.rent          import bp as rent_bp
-from routes.allocation    import bp as allocation_bp
-from modules.auth         import bp as auth_bp
-from modules.gmail        import bp as gmail_bp
+# ── Legacy routes (kept for backward compat) ──────────────────────────────────
+from routes.subscriptions      import bp as subscriptions_bp
+from routes.emis               import bp as emis_bp
+from routes.cards              import bp as cards_bp
+from routes.accounts           import bp as accounts_bp
+from routes.receivables        import bp as receivables_bp
+from routes.capex              import bp as capex_bp
+from routes.rent               import bp as rent_bp
 from routes.snapshots          import bp as snapshots_bp
-from routes.daily_logs         import bp as daily_logs_bp
 from routes.card_transactions  import bp as card_transactions_bp
+
+# ── New ledger-architecture routes ────────────────────────────────────────────
+from routes.financial_accounts import bp as financial_accounts_bp
+from routes.ledger_routes      import bp as ledger_bp
+from routes.payments           import bp as payments_bp
+from routes.obligations        import bp as obligations_bp
+from routes.billing_cycles     import bp as billing_cycles_bp
+from routes.allocation         import bp as allocation_bp
+from routes.daily_logs         import bp as daily_logs_bp
+from routes.dashboard          import bp as dashboard_bp
+
+# ── Modules ───────────────────────────────────────────────────────────────────
+from modules.auth  import bp as auth_bp
+from modules.gmail import bp as gmail_bp
 
 
 def create_app() -> Flask:
@@ -31,6 +67,7 @@ def create_app() -> Flask:
     JWTManager(app)
 
     for bp in (
+        # Legacy
         subscriptions_bp,
         emis_bp,
         cards_bp,
@@ -38,19 +75,29 @@ def create_app() -> Flask:
         receivables_bp,
         capex_bp,
         rent_bp,
+        snapshots_bp,
+        card_transactions_bp,
+        # New
+        financial_accounts_bp,
+        ledger_bp,
+        payments_bp,
+        obligations_bp,
+        billing_cycles_bp,
         allocation_bp,
+        daily_logs_bp,
+        dashboard_bp,
+        # Modules
         auth_bp,
         gmail_bp,
-        snapshots_bp,
-        daily_logs_bp,
-        card_transactions_bp,
     ):
         app.register_blueprint(bp)
 
     @app.before_request
     def require_auth():
-        if request.method == "OPTIONS" or request.path.startswith("/api/auth") \
-                or request.path == "/api/gmail/callback":
+        if request.method == "OPTIONS":
+            return
+        # Auth module and Gmail OAuth callback are public
+        if request.path.startswith("/api/auth") or request.path == "/api/gmail/callback":
             return
         try:
             verify_jwt_in_request()

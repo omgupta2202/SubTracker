@@ -10,7 +10,16 @@ export function useEmis() {
   const fetch = useCallback(async () => {
     try {
       setLoading(true);
-      setEmis(await api.getEmis());
+      const rows = await api.getObligations("emi");
+      setEmis(rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        lender: r.lender ?? "Lender",
+        amount: r.amount,
+        total_months: r.total_installments ?? 0,
+        paid_months: r.completed_installments ?? 0,
+        due_day: r.due_day ?? 1,
+      })));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load EMIs");

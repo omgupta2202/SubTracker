@@ -10,7 +10,9 @@ export function useRent() {
   const fetch = useCallback(async () => {
     try {
       setLoading(true);
-      setRent(await api.getRent());
+      const rows = await api.getObligations("rent");
+      const current = rows[0];
+      setRent(current ? { id: current.id, amount: current.amount, due_day: current.due_day ?? 1 } : { amount: 0, due_day: 1 });
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load rent");

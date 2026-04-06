@@ -10,7 +10,13 @@ export function useAccounts() {
   const fetch = useCallback(async () => {
     try {
       setLoading(true);
-      setAccounts(await api.getAccounts());
+      const rows = await api.getFinancialAccounts();
+      setAccounts(rows.filter(r => ["bank", "wallet", "cash"].includes(r.kind)).map(r => ({
+        id: r.id,
+        name: r.name,
+        balance: r.balance ?? 0,
+        bank: r.institution || r.kind,
+      })));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load accounts");

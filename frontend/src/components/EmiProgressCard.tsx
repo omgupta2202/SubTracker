@@ -21,10 +21,10 @@ function EmiRow({ emi, onRefetch }: { emi: EMI; onRefetch: () => void }) {
   const remaining = emi.total_months - emi.paid_months;
 
   async function save() {
-    await api.updateEmi(emi.id, {
+    await api.updateObligation(emi.id, {
       amount: Number(amount),
-      paid_months: Number(paid),
-      total_months: Number(total),
+      completed_installments: Number(paid),
+      total_installments: Number(total),
       due_day: Number(dueDay),
     });
     setEditing(false); onRefetch();

@@ -1,242 +1,717 @@
-import { useState } from "react";
-import { Plus, Trash2, FileText, ChevronDown, ChevronRight } from "lucide-react";
-import type { CreditCard, CardTransaction, CardStatement } from "@/types";
+import { useMemo, useState } from "react";
+import { FileText, CalendarClock, ArrowLeft, Plus, X, Loader2 } from "lucide-react";
+import type { CreditCard } from "@/types";
 import * as api from "@/services/api";
 import { formatINR } from "@/lib/utils";
 import { useCardTransactions } from "@/hooks/useCardTransactions";
+import { useToast } from "@/components/ToastProvider";
 
 const inputCls =
   "bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-zinc-100 " +
   "focus:outline-none focus:border-violet-500 transition-all w-full placeholder:text-zinc-600";
+const fieldLabelCls = "text-[11px] uppercase tracking-wider text-zinc-500";
 
 interface Props {
   card: CreditCard;
+  onBack?: () => void;
+  defaultAddingBill?: boolean;
+}
+type CcTab = "overview" | "cycles" | "transactions";
+
+function toDisplayDate(s: string) {
+  if (!s) return "—";
+  return new Date(s).toLocaleDateString("en-IN");
 }
 
-function groupByStatement(
-  transactions: CardTransaction[],
-  statements: CardStatement[],
-): { stmt: CardStatement | null; txns: CardTransaction[] }[] {
-  const stmtMap = new Map<string, CardStatement>(statements.map(s => [s.id, s]));
-  const unbilled: CardTransaction[] = [];
-  const billedMap = new Map<string, CardTransaction[]>();
+export function CardTransactionPanel({ card, onBack, defaultAddingBill = false }: Props) {
+  const toast = useToast();
+  const { entries, cycles, currentCycle, lastStatement, pastStatements, currentBalance, loading, refetch } = useCardTransactions(card.id);
+  const [tab, setTab] = useState<CcTab>(defaultAddingBill ? "cycles" : "overview");
+  const [editingCycleId, setEditingCycleId] = useState<string | null>(null);
+  const [addingEntry, setAddingEntry] = useState(false);
+  const [addingStatement, setAddingStatement] = useState(defaultAddingBill);
+  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [entryAmount, setEntryAmount] = useState("");
+  const [entryDescription, setEntryDescription] = useState("");
+  const [billStatementPeriod, setBillStatementPeriod] = useState<"current" | "last">("current");
+  const [billTotal, setBillTotal] = useState("");
+  const [billMinDue, setBillMinDue] = useState("");
+  const [editStatementDate, setEditStatementDate] = useState("");
+  const [editDueDate, setEditDueDate] = useState("");
+  const [editTotalBilled, setEditTotalBilled] = useState("");
+  const [editMinDue, setEditMinDue] = useState("");
 
-  for (const t of transactions) {
-    if (!t.statement_id) {
-      unbilled.push(t);
-    } else {
-      if (!billedMap.has(t.statement_id)) billedMap.set(t.statement_id, []);
-      billedMap.get(t.statement_id)!.push(t);
+  const openCycles = useMemo(
+    () => cycles.filter(c => !c.is_closed),
+    [cycles]
+  );
+  const historyCycles = useMemo(
+    () => (pastStatements?.length ? pastStatements.slice(0, 8) : cycles.filter(c => c.is_closed).slice(0, 8)),
+    [pastStatements, cycles]
+  );
+  const billedDueTotalFromCycles = useMemo(
+    () =>
+      cycles
+        .filter(c => c.is_closed)
+        .reduce((sum, c) => {
+          const due = Number(c.balance_due ?? (Number(c.total_billed || 0) - Number(c.total_paid || 0)));
+          return sum + Math.max(due, 0);
+        }, 0),
+    [cycles]
+  );
+  const unbilledTotalFromCycles = useMemo(
+    () =>
+      openCycles.reduce((sum, c) => {
+        const unbilled = Number(c.balance_due ?? c.total_billed ?? 0);
+        return sum + Math.max(unbilled, 0);
+      }, 0),
+    [openCycles]
+  );
+  const derivedOutstanding = useMemo(() => billedDueTotalFromCycles + unbilledTotalFromCycles, [billedDueTotalFromCycles, unbilledTotalFromCycles]);
+  const displayedOutstanding = useMemo(() => {
+    if (cycles.length === 0) return currentBalance;
+    return derivedOutstanding;
+  }, [cycles.length, currentBalance, derivedOutstanding]);
+  const latestClosedStatementDate = useMemo(() => {
+    const dates = cycles
+      .filter(c => c.is_closed && c.statement_date)
+      .map(c => new Date(c.statement_date).getTime())
+      .filter(Number.isFinite);
+    if (dates.length === 0) return null;
+    return new Date(Math.max(...dates));
+  }, [cycles]);
+
+  const debitEntries = useMemo(
+    () => entries.filter(e => e.direction === "debit"),
+    [entries]
+  );
+  const creditEntries = useMemo(
+    () => entries.filter(e => e.direction === "credit"),
+    [entries]
+  );
+
+  const billedEntries = useMemo(
+    () => debitEntries.filter(e => {
+      if (e.is_billed) return true;
+      if (!latestClosedStatementDate) return false;
+      const d = new Date(e.effective_date);
+      return Number.isFinite(d.getTime()) && d <= latestClosedStatementDate;
+    }),
+    [debitEntries, latestClosedStatementDate]
+  );
+  const unbilledEntries = useMemo(
+    () => debitEntries.filter(e => {
+      if (e.is_billed) return false;
+      if (!latestClosedStatementDate) return true;
+      const d = new Date(e.effective_date);
+      return Number.isFinite(d.getTime()) && d > latestClosedStatementDate;
+    }),
+    [debitEntries, latestClosedStatementDate]
+  );
+  async function handleAddBill() {
+    if (!billTotal) return;
+    try {
+      await api.createBillingCycleForCard(card.id, {
+        statement_period: billStatementPeriod,
+        total_billed: Number(billTotal),
+        minimum_due: billMinDue ? Number(billMinDue) : undefined,
+      });
+      setAddingStatement(false);
+      setBillStatementPeriod("current");
+      setBillTotal("");
+      setBillMinDue("");
+      void refetch();
+      toast.success("Statement saved");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to save statement";
+      toast.error(msg);
     }
   }
 
-  const groups: { stmt: CardStatement | null; txns: CardTransaction[] }[] = [
-    { stmt: null, txns: unbilled },
-  ];
-
-  for (const stmt of statements) {
-    groups.push({ stmt, txns: billedMap.get(stmt.id) ?? [] });
-  }
-
-  return groups;
-}
-
-export function CardTransactionPanel({ card }: Props) {
-  const { transactions, statements, loading, refetch } = useCardTransactions(card.id);
-  const [adding, setAdding] = useState(false);
-  const [closingStmt, setClosingStmt] = useState(false);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-
-  // Add form state
-  const [desc, setDesc]         = useState("");
-  const [amount, setAmount]     = useState("");
-  const [txnDate, setTxnDate]   = useState("");
-
-  // Close statement form state
-  const [stmtDate, setStmtDate]     = useState("");
-  const [dueDate, setDueDate]       = useState("");
-  const [minDue, setMinDue]         = useState("");
-
-  async function handleAdd() {
-    if (!desc || !amount) return;
+  async function handleAddEntry() {
+    if (!entryDate || !entryAmount || !entryDescription) return;
     try {
-      await api.addCardTransaction(card.id, {
-        description: desc,
-        amount: parseFloat(amount),
-        txn_date: txnDate || undefined,
+      await api.createLedgerEntry({
+        account_id: card.id,
+        direction: "debit",
+        amount: Number(entryAmount),
+        description: entryDescription,
+        effective_date: entryDate,
+        category: "card_spend",
       });
-      setDesc(""); setAmount(""); setTxnDate("");
-      setAdding(false);
+      setAddingEntry(false);
+      setEntryAmount("");
+      setEntryDescription("");
       void refetch();
-    } catch (e) { console.error(e); }
+      toast.success("Transaction entry saved");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to save entry";
+      toast.error(msg);
+    }
   }
 
-  async function handleDelete(txnId: string) {
+  async function handleUpdateCycle(cycleId: string) {
+    if (!editStatementDate || !editDueDate) return;
     try {
-      await api.deleteCardTransaction(card.id, txnId);
-      void refetch();
-    } catch (e) { console.error(e); }
-  }
-
-  async function handleCloseStatement() {
-    if (!stmtDate || !dueDate) return;
-    try {
-      await api.closeCardStatement(card.id, {
-        statement_date: stmtDate,
-        due_date: dueDate,
-        minimum_due: minDue ? parseFloat(minDue) : 0,
+      await api.updateBillingCycle(cycleId, {
+        statement_date: editStatementDate,
+        due_date: editDueDate,
+        total_billed: editTotalBilled ? Number(editTotalBilled) : undefined,
+        minimum_due: editMinDue ? Number(editMinDue) : undefined,
       });
-      setStmtDate(""); setDueDate(""); setMinDue("");
-      setClosingStmt(false);
+      setEditingCycleId(null);
       void refetch();
-    } catch (e) { console.error(e); }
+      toast.success("Cycle updated");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to update cycle";
+      toast.error(msg);
+    }
   }
 
-  function toggleCollapse(key: string) {
-    setCollapsed(prev => {
-      const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
-      return next;
-    });
+  async function handleDeleteCycle(cycleId: string) {
+    if (!window.confirm("Delete this cycle? Linked transactions will become unbilled.")) return;
+    try {
+      await api.deleteBillingCycle(cycleId);
+      if (editingCycleId === cycleId) setEditingCycleId(null);
+      void refetch();
+      toast.success("Cycle deleted");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to delete cycle";
+      toast.error(msg);
+    }
   }
 
-  const groups = groupByStatement(transactions, statements);
-  const unbilledTotal = groups[0].txns.reduce((s, t) => s + Number(t.amount), 0);
-  const hasUnbilled   = groups[0].txns.length > 0;
+  async function markCyclePaid(cycleId: string, totalBilledValue: number) {
+    try {
+      await api.updateBillingCycle(cycleId, { total_paid: Math.max(Number(totalBilledValue || 0), 0) });
+      void refetch();
+      toast.success("Statement marked as paid");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to mark statement paid";
+      toast.error(msg);
+    }
+  }
+
+  async function markCycleUnpaid(cycleId: string) {
+    try {
+      await api.updateBillingCycle(cycleId, { total_paid: 0 });
+      void refetch();
+      toast.success("Statement marked as unpaid");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to mark statement unpaid";
+      toast.error(msg);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-4">
-
-      {/* Actions row */}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => { setAdding(a => !a); setClosingStmt(false); }}
-          className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
-        >
-          <Plus size={13} /> Add Transaction
-        </button>
-        {hasUnbilled && (
+      {onBack && (
+        <div className="flex items-center justify-between">
           <button
-            onClick={() => { setClosingStmt(s => !s); setAdding(false); }}
-            className="flex items-center gap-1.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-200 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+            onClick={onBack}
+            className="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-200 transition-colors"
           >
-            <FileText size={13} /> Close Statement
+            <ArrowLeft size={13} />
+            Back to cards
+          </button>
+          <button
+            onClick={onBack}
+            className="inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-200 transition-colors"
+            aria-label="Close card activity"
+            title="Close"
+          >
+            <X size={13} />
+            Close
+          </button>
+        </div>
+      )}
+
+      <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-4">
+        <div className="flex items-center justify-between">
+          <p className="text-xs uppercase tracking-wide text-zinc-500">Current Outstanding</p>
+          <div className="flex items-center gap-2">
+            <p className="font-mono text-sm text-zinc-500">{cycles.length > 0 ? "cycle-derived" : "ledger"}</p>
+            <button
+              onClick={() => { setTab("cycles"); setAddingStatement(v => !v); }}
+              className="inline-flex items-center gap-1.5 text-xs bg-zinc-700/40 border border-zinc-600/40 text-zinc-300 hover:bg-zinc-700/60 transition-colors px-2.5 py-1 rounded-lg"
+            >
+              {addingStatement ? <X size={12} /> : <Plus size={12} />}
+              {addingStatement ? "Cancel" : "Add Manual Statement"}
+            </button>
+          </div>
+        </div>
+        <p className="font-mono text-2xl font-bold text-red-400 mt-1">{formatINR(displayedOutstanding)}</p>
+        <p className="text-xs text-zinc-500 mt-1">
+          {card.name}{card.last4 ? ` ···· ${card.last4}` : ""}{card.bank ? ` · ${card.bank}` : ""}
+        </p>
+      </div>
+
+      <div className="rounded-xl border border-zinc-700/50 bg-zinc-900/40 p-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1 bg-zinc-800 rounded-lg p-0.5 border border-zinc-700">
+          <button
+            onClick={() => { setTab("overview"); setAddingEntry(false); setAddingStatement(false); }}
+            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${tab === "overview" ? "bg-violet-600 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
+          >
+            Overview
+          </button>
+          <button
+            onClick={() => { setTab("cycles"); setAddingEntry(false); }}
+            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${tab === "cycles" ? "bg-violet-600 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
+          >
+            Cycles
+          </button>
+          <button
+            onClick={() => { setTab("transactions"); setAddingStatement(false); }}
+            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${tab === "transactions" ? "bg-violet-600 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
+          >
+            Transactions
+          </button>
+        </div>
+        {tab === "transactions" && (
+          <button
+            onClick={() => setAddingEntry(v => !v)}
+            className="inline-flex items-center gap-1.5 text-xs bg-violet-600/20 border border-violet-500/40 text-violet-300 hover:bg-violet-600/30 transition-colors px-2.5 py-1 rounded-lg"
+          >
+            {addingEntry ? <X size={12} /> : <Plus size={12} />}
+            {addingEntry ? "Cancel Entry" : "Add Manual Entry"}
           </button>
         )}
       </div>
 
-      {/* Add transaction form */}
-      {adding && (
-        <div className="rounded-xl bg-zinc-800/60 border border-violet-500/20 p-4 flex flex-col gap-3">
-          <p className="text-xs font-semibold text-violet-400 uppercase tracking-wider">New Transaction</p>
-          <input className={inputCls} placeholder="Description" value={desc} onChange={e => setDesc(e.target.value)} />
-          <div className="grid grid-cols-2 gap-3">
-            <input className={inputCls} type="number" placeholder="Amount ₹" value={amount} onChange={e => setAmount(e.target.value)} />
-            <input className={inputCls} type="date" value={txnDate} onChange={e => setTxnDate(e.target.value)} />
+      {tab === "overview" && (
+        <>
+          {(currentCycle || lastStatement) && (
+            <div className="rounded-xl border border-zinc-700/50 overflow-hidden">
+              <div className="px-4 py-3 bg-zinc-800/60">
+                <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Cycle Overview</p>
+              </div>
+              <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+                  <p className="text-[11px] uppercase tracking-wider text-amber-300">Current Cycle (Unbilled)</p>
+                  {currentCycle ? (
+                    <>
+                      <p className="text-xs text-zinc-400 mt-1">
+                        {toDisplayDate(currentCycle.cycle_start ?? "")} to {toDisplayDate(currentCycle.cycle_end ?? "")}
+                      </p>
+                      <p className="font-mono text-sm text-amber-300 mt-1">{formatINR(Number(currentCycle.total_billed || 0))}</p>
+                    </>
+                  ) : <p className="text-xs text-zinc-500 mt-1">No open cycle</p>}
+                </div>
+                <div className="rounded-lg border border-zinc-700/50 bg-zinc-900/40 p-3">
+                  <p className="text-[11px] uppercase tracking-wider text-zinc-300">Last Statement</p>
+                  {lastStatement ? (
+                    <>
+                      <p className="text-xs text-zinc-400 mt-1">{toDisplayDate(lastStatement.statement_date)} · due {toDisplayDate(lastStatement.due_date)}</p>
+                      <p className="font-mono text-sm text-zinc-200 mt-1">{formatINR(Number(lastStatement.total_billed || 0))}</p>
+                    </>
+                  ) : <p className="text-xs text-zinc-500 mt-1">No closed statements yet</p>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-xl border border-zinc-700/50 overflow-hidden">
+            <div className="px-4 py-3 bg-zinc-800/60 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText size={14} className="text-violet-400" />
+                <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Spend Snapshot</p>
+              </div>
+            </div>
+            <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
+                <p className="text-[11px] uppercase tracking-wider text-red-300">Billed (Due)</p>
+                <p className="font-mono text-sm text-red-300 mt-0.5">{formatINR(billedDueTotalFromCycles)}</p>
+              </div>
+              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+                <p className="text-[11px] uppercase tracking-wider text-amber-300">Unbilled</p>
+                <p className="font-mono text-sm text-amber-300 mt-0.5">{formatINR(unbilledTotalFromCycles)}</p>
+              </div>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <button onClick={handleAdd} className="flex-1 bg-violet-600 hover:bg-violet-500 text-white py-2 rounded-lg text-xs font-semibold transition-colors">Save</button>
-            <button onClick={() => setAdding(false)} className="px-4 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 py-2 rounded-lg text-xs transition-colors">Cancel</button>
-          </div>
-        </div>
+        </>
       )}
 
-      {/* Close statement form */}
-      {closingStmt && (
-        <div className="rounded-xl bg-zinc-800/60 border border-amber-500/20 p-4 flex flex-col gap-3">
-          <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider">Close Statement</p>
-          <p className="text-xs text-zinc-500">
-            All unbilled transactions up to the statement date will be locked into this statement.
-            Unbilled total: <span className="text-zinc-200 font-mono">{formatINR(unbilledTotal)}</span>
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-zinc-500 mb-1 block">Statement Cut-off Date</label>
-              <input className={inputCls} type="date" value={stmtDate} onChange={e => setStmtDate(e.target.value)} />
-            </div>
-            <div>
-              <label className="text-xs text-zinc-500 mb-1 block">Payment Due Date</label>
-              <input className={inputCls} type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} />
-            </div>
+      {tab === "cycles" && (
+      <div className="rounded-xl border border-zinc-700/50 overflow-hidden">
+        <div className="px-4 py-3 bg-zinc-800/60 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CalendarClock size={14} className="text-violet-400" />
+            <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Statements</p>
           </div>
-          <div>
-            <label className="text-xs text-zinc-500 mb-1 block">Minimum Due ₹ (optional)</label>
-            <input className={inputCls} type="number" placeholder="0" value={minDue} onChange={e => setMinDue(e.target.value)} />
-          </div>
-          <div className="flex gap-2">
-            <button onClick={handleCloseStatement} className="flex-1 bg-amber-600 hover:bg-amber-500 text-white py-2 rounded-lg text-xs font-semibold transition-colors">Close Statement</button>
-            <button onClick={() => setClosingStmt(false)} className="px-4 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 py-2 rounded-lg text-xs transition-colors">Cancel</button>
-          </div>
+          <span className="text-xs text-zinc-600">{openCycles.length} open</span>
         </div>
-      )}
-
-      {/* Transaction groups */}
-      {loading ? (
-        <div className="h-20 rounded-xl bg-zinc-800/40 animate-pulse" />
-      ) : transactions.length === 0 && statements.length === 0 ? (
-        <p className="text-xs text-zinc-600 text-center py-6">
-          No transactions yet. Add one above.
-          <br /><span className="text-zinc-700">Note: this card's outstanding balance is set manually.</span>
-        </p>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {groups.map(({ stmt, txns }) => {
-            const key = stmt?.id ?? "unbilled";
-            const isCollapsed = collapsed.has(key);
-            const total = txns.reduce((s, t) => s + Number(t.amount), 0);
-            const isUnbilled = !stmt;
-
-            return (
-              <div key={key} className="rounded-xl border border-zinc-700/50 overflow-hidden">
-                {/* Group header */}
+        <div className="p-3 flex flex-col gap-2">
+          {addingEntry && (
+            <div className="rounded-lg border border-violet-500/30 bg-zinc-900/40 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-violet-300">Add Manual Card Entry</p>
                 <button
-                  onClick={() => toggleCollapse(key)}
-                  className="w-full flex items-center justify-between px-4 py-2.5 bg-zinc-800/60 hover:bg-zinc-800 transition-colors"
+                  onClick={() => setAddingEntry(false)}
+                  className="text-zinc-500 hover:text-zinc-200 transition-colors"
+                  aria-label="Close manual entry form"
+                  title="Close"
                 >
-                  <div className="flex items-center gap-2">
-                    {isCollapsed ? <ChevronRight size={13} className="text-zinc-500" /> : <ChevronDown size={13} className="text-zinc-500" />}
-                    <span className={`text-xs font-semibold ${isUnbilled ? "text-amber-400" : "text-zinc-300"}`}>
-                      {isUnbilled ? "Unbilled" : `Statement — ${stmt.statement_date}`}
-                    </span>
-                    {!isUnbilled && (
-                      <span className="text-xs text-zinc-600">Due {stmt.due_date}</span>
-                    )}
-                    <span className="text-xs text-zinc-600">{txns.length} txn{txns.length !== 1 ? "s" : ""}</span>
-                  </div>
-                  <span className={`font-mono text-xs font-semibold ${isUnbilled ? "text-amber-300" : "text-zinc-300"}`}>
-                    {formatINR(total)}
-                  </span>
+                  <X size={13} />
                 </button>
+              </div>
+              <p className="text-[11px] text-zinc-500 mb-2">
+                Use transaction date only. Billed vs unbilled is auto-determined from your card billing cycle.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="flex flex-col gap-1">
+                  <label className={fieldLabelCls}>Transaction Date</label>
+                  <input
+                    className={inputCls}
+                    type="date"
+                    value={entryDate}
+                    onChange={e => setEntryDate(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className={fieldLabelCls}>Amount</label>
+                  <input
+                    className={inputCls}
+                    type="number"
+                    placeholder="Amount ₹"
+                    value={entryAmount}
+                    onChange={e => setEntryAmount(e.target.value)}
+                  />
+                </div>
+                <div className="sm:col-span-2 flex flex-col gap-1">
+                  <label className={fieldLabelCls}>Description</label>
+                  <input
+                    className="sm:col-span-2 bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-violet-500 transition-all w-full placeholder:text-zinc-600"
+                    value={entryDescription}
+                    onChange={e => setEntryDescription(e.target.value)}
+                    placeholder="Description (merchant/spend note)"
+                  />
+                </div>
+                <button
+                  onClick={() => void handleAddEntry()}
+                  className="col-span-1 bg-violet-600 hover:bg-violet-500 text-white py-2 rounded-lg text-xs font-semibold transition-colors"
+                >
+                  Save Entry
+                </button>
+                <button
+                  onClick={() => setAddingEntry(false)}
+                  className="col-span-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 py-2 rounded-lg text-xs transition-colors"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+          {addingStatement && (
+            <div className="rounded-lg border border-violet-500/30 bg-zinc-900/40 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-violet-300">Add Manual Statement</p>
+                <button
+                  onClick={() => setAddingStatement(false)}
+                  className="text-zinc-500 hover:text-zinc-200 transition-colors"
+                  aria-label="Close manual bill form"
+                  title="Close"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1">
+                <label className="text-[11px] uppercase tracking-wider text-zinc-500">Statement Period</label>
+                <select
+                  className={inputCls}
+                  value={billStatementPeriod}
+                  onChange={e => setBillStatementPeriod((e.target.value as "current" | "last"))}
+                >
+                  <option value="current">Current Cycle Month</option>
+                  <option value="last">Last Cycle Month</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className={fieldLabelCls}>Auto Dates</label>
+                <div className="min-h-[40px] rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-400 flex items-center">
+                  Statement date from card billing day. Due date auto +20 days (or card setting).
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className={fieldLabelCls}>Total Billed</label>
+                <input
+                  className={inputCls}
+                  type="number"
+                  placeholder="Total billed ₹"
+                  value={billTotal}
+                  onChange={e => setBillTotal(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className={fieldLabelCls}>Minimum Due (Optional)</label>
+                <input
+                  className={inputCls}
+                  type="number"
+                  placeholder="Minimum due ₹ (optional)"
+                  value={billMinDue}
+                  onChange={e => setBillMinDue(e.target.value)}
+                />
+              </div>
+              <div className="sm:col-span-2 text-[11px] text-zinc-500">
+                Cycle start/end will be auto-derived from statement date and card billing day.
+              </div>
+              <button
+                onClick={() => void handleAddBill()}
+                className="col-span-1 bg-violet-600 hover:bg-violet-500 text-white py-2 rounded-lg text-xs font-semibold transition-colors"
+              >
+                Save Statement
+              </button>
+              <button
+                onClick={() => setAddingStatement(false)}
+                className="col-span-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 py-2 rounded-lg text-xs transition-colors"
+              >
+                Dismiss
+              </button>
+              </div>
+            </div>
+          )}
+          {openCycles.length === 0 ? (
+            <p className="text-xs text-zinc-600">No open billing cycles.</p>
+          ) : openCycles.map(c => (
+            <div key={c.id} className="rounded-lg border border-zinc-700/50 bg-zinc-900/40 p-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-zinc-200 font-medium">Statement {toDisplayDate(c.statement_date)}</p>
+                <p className="font-mono text-sm text-red-400">{formatINR(Number(c.balance_due))}</p>
+              </div>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Due {toDisplayDate(c.due_date)} · Min {formatINR(Number(c.minimum_due))}
+              </p>
 
-                {/* Transactions list */}
-                {!isCollapsed && (
-                  <div className="divide-y divide-zinc-800/60">
-                    {txns.length === 0 ? (
-                      <p className="text-xs text-zinc-600 px-4 py-3">No transactions</p>
-                    ) : txns.map(t => (
-                      <div key={t.id} className="flex items-center justify-between px-4 py-2.5 group hover:bg-zinc-800/30">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-zinc-200 truncate">{t.description}</p>
-                          <p className="text-xs text-zinc-600">{t.txn_date}</p>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="font-mono text-sm text-zinc-300">{formatINR(Number(t.amount))}</span>
-                          {isUnbilled && (
-                            <button
-                              onClick={() => handleDelete(t.id)}
-                              className="opacity-0 group-hover:opacity-100 p-1 rounded text-zinc-600 hover:text-red-400 transition-all"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          )}
-                        </div>
+              {editingCycleId === c.id ? (
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="flex flex-col gap-1">
+                    <label className={fieldLabelCls}>Statement Date</label>
+                    <input className={inputCls} type="date" value={editStatementDate} onChange={e => setEditStatementDate(e.target.value)} />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className={fieldLabelCls}>Due Date</label>
+                    <input className={inputCls} type="date" value={editDueDate} onChange={e => setEditDueDate(e.target.value)} />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className={fieldLabelCls}>Total Billed</label>
+                    <input className={inputCls} type="number" placeholder="Total billed ₹" value={editTotalBilled} onChange={e => setEditTotalBilled(e.target.value)} />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className={fieldLabelCls}>Minimum Due</label>
+                    <input className={inputCls} type="number" placeholder="Minimum due ₹" value={editMinDue} onChange={e => setEditMinDue(e.target.value)} />
+                  </div>
+                  <button
+                    onClick={() => void handleUpdateCycle(c.id)}
+                    className="col-span-1 bg-violet-600 hover:bg-violet-500 text-white py-2 rounded-lg text-xs font-semibold transition-colors"
+                  >
+                    Save Changes
+                  </button>
+                  <button
+                    onClick={() => setEditingCycleId(null)}
+                    className="col-span-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 py-2 rounded-lg text-xs transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-3 flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      setEditingCycleId(c.id);
+                      setEditStatementDate((c.statement_date ?? "").slice(0, 10));
+                      setEditDueDate((c.due_date ?? "").slice(0, 10));
+                      setEditTotalBilled(String(c.total_billed ?? ""));
+                      setEditMinDue(String(c.minimum_due ?? ""));
+                    }}
+                    className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
+                  >
+                    Edit statement
+                  </button>
+                  <button
+                    onClick={() => void handleDeleteCycle(c.id)}
+                    className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                  >
+                    Delete cycle
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+      )}
+
+      {tab === "transactions" && (
+      <div className="rounded-xl border border-zinc-700/50 overflow-hidden">
+        <div className="px-4 py-3 bg-zinc-800/60 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileText size={14} className="text-violet-400" />
+            <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Card Transactions</p>
+          </div>
+          <span className="text-xs text-zinc-600">{debitEntries.length}</span>
+        </div>
+        <div className="divide-y divide-zinc-800/60">
+          {loading ? (
+            <div className="h-20 bg-zinc-800/30 flex items-center justify-center">
+              <Loader2 size={18} className="text-violet-400 animate-spin" />
+            </div>
+          ) : (
+            <>
+              <div className="px-4 py-2 bg-zinc-900/40">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-red-300">
+                  Billed Transactions ({billedEntries.length})
+                </p>
+              </div>
+              {billedEntries.length === 0 ? (
+                <p className="text-xs text-zinc-600 px-4 py-3">No billed transactions yet.</p>
+              ) : billedEntries.map(e => (
+                <div key={e.id} className="px-4 py-2.5 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-zinc-200">{e.description}</p>
+                    <p className="text-xs text-zinc-600">{toDisplayDate(e.effective_date)} · {e.category}</p>
+                  </div>
+                  <p className="font-mono text-sm text-red-400">−{formatINR(Number(e.amount))}</p>
+                </div>
+              ))}
+
+              <div className="px-4 py-2 bg-zinc-900/40 border-t border-zinc-800/60">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-300">
+                  Unbilled Transactions ({unbilledEntries.length})
+                </p>
+              </div>
+              {unbilledEntries.length === 0 ? (
+                <p className="text-xs text-zinc-600 px-4 py-3">No unbilled transactions.</p>
+              ) : unbilledEntries.map(e => (
+                <div key={e.id} className="px-4 py-2.5 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-zinc-200">{e.description}</p>
+                    <p className="text-xs text-zinc-600">{toDisplayDate(e.effective_date)} · {e.category}</p>
+                  </div>
+                  <p className="font-mono text-sm text-amber-300">−{formatINR(Number(e.amount))}</p>
+                </div>
+              ))}
+
+              {creditEntries.length > 0 && (
+                <>
+                  <div className="px-4 py-2 bg-zinc-900/40 border-t border-zinc-800/60">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
+                      Payments / Credits ({creditEntries.length})
+                    </p>
+                  </div>
+                  {creditEntries.map(e => (
+                    <div key={e.id} className="px-4 py-2.5 flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-zinc-200">{e.description}</p>
+                        <p className="text-xs text-zinc-600">{toDisplayDate(e.effective_date)} · {e.category}</p>
                       </div>
-                    ))}
+                      <p className="font-mono text-sm text-emerald-400">+{formatINR(Number(e.amount))}</p>
+                    </div>
+                  ))}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+      )}
+
+      {tab === "cycles" && historyCycles.length > 0 && (
+        <div className="rounded-xl border border-zinc-700/50 overflow-hidden">
+          <div className="px-4 py-3 bg-zinc-800/60">
+            <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">Closed Cycles</p>
+          </div>
+          <div className="divide-y divide-zinc-800/60">
+            {historyCycles.map(c => (
+              <div key={c.id} className="px-4 py-2.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-zinc-400">
+                      {toDisplayDate(c.statement_date)} · due {toDisplayDate(c.due_date)}
+                    </p>
+                    <span className={`inline-block mt-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${
+                      c.statement_status === "paid"
+                        ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                        : c.statement_status === "partial"
+                          ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
+                          : "text-red-300 border-red-500/30 bg-red-500/10"
+                    }`}>
+                      {c.statement_status ?? (Number(c.balance_due) <= 0 ? "paid" : "unpaid")}
+                    </span>
+                  </div>
+                  <p className="font-mono text-xs text-zinc-300">{formatINR(Number(c.total_billed))}</p>
+                </div>
+
+                {editingCycleId === c.id ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <div className="flex flex-col gap-1">
+                      <label className={fieldLabelCls}>Statement Date</label>
+                      <input className={inputCls} type="date" value={editStatementDate} onChange={e => setEditStatementDate(e.target.value)} />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className={fieldLabelCls}>Due Date</label>
+                      <input className={inputCls} type="date" value={editDueDate} onChange={e => setEditDueDate(e.target.value)} />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className={fieldLabelCls}>Total Billed</label>
+                      <input className={inputCls} type="number" placeholder="Total billed ₹" value={editTotalBilled} onChange={e => setEditTotalBilled(e.target.value)} />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className={fieldLabelCls}>Minimum Due</label>
+                      <input className={inputCls} type="number" placeholder="Minimum due ₹" value={editMinDue} onChange={e => setEditMinDue(e.target.value)} />
+                    </div>
+                    <button
+                      onClick={() => void handleUpdateCycle(c.id)}
+                      className="col-span-1 bg-violet-600 hover:bg-violet-500 text-white py-2 rounded-lg text-xs font-semibold transition-colors"
+                    >
+                      Save Changes
+                    </button>
+                    <button
+                      onClick={() => setEditingCycleId(null)}
+                      className="col-span-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 py-2 rounded-lg text-xs transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-2 flex items-center gap-3">
+                    {Number(c.balance_due) > 0 ? (
+                      <button
+                        onClick={() => void markCyclePaid(c.id, Number(c.total_billed))}
+                        className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+                      >
+                        Mark Paid
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => void markCycleUnpaid(c.id)}
+                        className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                      >
+                        Mark Unpaid
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        setEditingCycleId(c.id);
+                        setEditStatementDate((c.statement_date ?? "").slice(0, 10));
+                        setEditDueDate((c.due_date ?? "").slice(0, 10));
+                        setEditTotalBilled(String(c.total_billed ?? ""));
+                        setEditMinDue(String(c.minimum_due ?? ""));
+                      }}
+                      className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
+                    >
+                      Edit statement
+                    </button>
+                    <button
+                      onClick={() => void handleDeleteCycle(c.id)}
+                      className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                    >
+                      Delete cycle
+                    </button>
                   </div>
                 )}
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
       )}
     </div>

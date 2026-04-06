@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react";
-import { Settings, PlusCircle, History, LogOut } from "lucide-react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { Settings, PlusCircle, History, LogOut, BellRing, SlidersHorizontal } from "lucide-react";
 import { useAuth } from "@/modules/auth";
 import { useSubscriptions } from "@/hooks/useSubscriptions";
 import { useEmis } from "@/hooks/useEmis";
@@ -9,6 +9,7 @@ import { useReceivables } from "@/hooks/useReceivables";
 import { useCapex } from "@/hooks/useCapex";
 import { useRent } from "@/hooks/useRent";
 import { useSmartAllocation } from "@/hooks/useSmartAllocation";
+import { useDashboard } from "@/hooks/useDashboard";
 import { usePeriodSummary } from "@/hooks/useFilteredCCTotal";
 import { loadLayout, saveLayout, setCardWidth, setRowHeight, getRowHeights } from "@/store/layoutStore";
 import type { CardConfig, DashboardFilters } from "@/types";
@@ -23,6 +24,7 @@ import { HistoryPanel } from "./HistoryPanel";
 import { LayoutConfigurator } from "./LayoutConfigurator";
 import { ResizableGrid } from "./ResizableGrid";
 import { DashboardFilterBar, loadFilters, isFilterActive } from "./DashboardFilterBar";
+import { AttentionSection } from "./AttentionSection";
 
 export function Dashboard() {
   const { logout, user } = useAuth();
@@ -33,7 +35,8 @@ export function Dashboard() {
   const { receivables, refetch: rRec }    = useReceivables();
   const { capex, refetch: rCapex }        = useCapex();
   const { rent, refetch: rRent }          = useRent();
-  const { data: allocation, loading: lAlloc, refetch: rAlloc } = useSmartAllocation();
+  const { data: allocation, refetch: rAlloc } = useSmartAllocation();
+  const { summary: dashSummary, loading: lDash, refetch: rDash } = useDashboard();
 
   const [layout, setLayout] = useState<CardConfig[]>(() => {
     const stored = loadLayout();
@@ -49,18 +52,23 @@ export function Dashboard() {
   const [configOpen, setConfigOpen]   = useState(false);
   const [drawerTab, setDrawerTab]     = useState<CardConfig["id"] | undefined>();
   const [filters, setFilters] = useState<DashboardFilters>(loadFilters);
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const attentionRef = useRef<HTMLDivElement | null>(null);
+  const filterRef = useRef<HTMLDivElement | null>(null);
 
   const openDrawer = (tab?: string) => {
     setDrawerTab(tab as any);
     setDrawerOpen(true);
   };
   const filterActive = isFilterActive(filters);
-  const { summary: periodSummary } = usePeriodSummary(filters, filterActive);
+  const { summary: periodSummary, loading: periodLoading } = usePeriodSummary(filters, filterActive);
 
   function refetchAll() {
     void rSub(); void rEmi(); void rCard();
     void rAcc(); void rRec(); void rCapex();
-    void rRent(); void rAlloc();
+    void rRent(); void rAlloc(); void rDash();
   }
 
   const handleWidthChange = useCallback((id: string, pct: number) => {
@@ -84,11 +92,23 @@ export function Dashboard() {
     .filter(c => c.visible);
 
   const cardMap: Record<string, React.ReactNode> = {
-    "net-worth":    <NetWorthCard accounts={accounts} cards={cards} rent={allocation?.summary.rent ?? 0} onRefetch={refetchAll} onManageAccounts={() => openDrawer("accounts")} />,
-    "cash-flow":    <CashFlowCard data={allocation} loading={lAlloc} periodSummary={filterActive ? periodSummary : null} />,
-    "capex":        <CapExCard items={capex} availableAfterCC={allocation?.summary.net_after_cc ?? 0} onRefetch={refetchAll} />,
-    "monthly-burn": <MonthlyBurnCard subscriptions={subscriptions} emis={emis} cards={cards} onRefetch={refetchAll} />,
-    "seven-day":    <SevenDayHorizonCard subscriptions={subscriptions} emis={emis} cards={cards} />,
+    "net-worth":    <NetWorthCard
+                      accounts={dashSummary?.accounts ?? accounts}
+                      cards={dashSummary?.credit_cards ?? cards.map(c => ({ id: c.id, name: c.name, last4: c.last4, outstanding: c.outstanding, minimum_due: c.minimum_due }))}
+                      rent={rent.amount}
+                      onRefetch={refetchAll}
+                      onManageAccounts={() => openDrawer("accounts")}
+                    />,
+    "cash-flow":    <CashFlowCard
+                      dashboardSummary={dashSummary}
+                      dashboardLoading={lDash}
+                      allocation={allocation}
+                      periodSummary={filterActive ? periodSummary : null}
+                      periodLoading={filterActive ? periodLoading : false}
+                    />,
+    "capex":        <CapExCard items={capex} availableAfterCC={dashSummary?.net_after_cc ?? allocation?.summary.net_after_cc ?? 0} onRefetch={refetchAll} />,
+    "monthly-burn": <MonthlyBurnCard subscriptions={subscriptions} emis={emis} cards={cards} monthlyBurn={dashSummary?.monthly_burn} monthlyBurnTrendPct={dashSummary?.monthly_burn_trend_pct ?? null} onRefetch={refetchAll} />,
+    "seven-day":    <SevenDayHorizonCard upcomingDues={dashSummary?.upcoming_dues_7d} subscriptions={subscriptions} emis={emis} cards={cards} />,
     "emi-progress": <EmiProgressCard emis={emis} onRefetch={refetchAll} />,
   };
 
@@ -98,10 +118,32 @@ export function Dashboard() {
     node: cardMap[c.id],
   }));
 
+  useEffect(() => {
+    function onDocMouseDown(ev: MouseEvent) {
+      const target = ev.target as Node;
+      if (
+        attentionOpen &&
+        attentionRef.current &&
+        !attentionRef.current.contains(target)
+      ) {
+        setAttentionOpen(false);
+      }
+      if (
+        filterOpen &&
+        filterRef.current &&
+        !filterRef.current.contains(target)
+      ) {
+        setFilterOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [attentionOpen, filterOpen]);
+
   return (
     <div className="min-h-screen bg-zinc-950 p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div ref={headerRef} className="relative flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-zinc-100 tracking-tight">SubTracker</h1>
           <p className="text-sm text-zinc-500 mt-0.5">Financial dashboard · March / April</p>
@@ -140,6 +182,35 @@ export function Dashboard() {
             History
           </button>
           <button
+            onClick={() => {
+              setAttentionOpen(v => !v);
+              setFilterOpen(false);
+            }}
+            className="relative p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors border border-zinc-700"
+            title="Needs Attention"
+          >
+            <BellRing size={18} />
+            {(dashSummary?.attention_items?.length ?? 0) > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] leading-4 text-center">
+                {Math.min(dashSummary?.attention_items?.length ?? 0, 9)}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => {
+              setFilterOpen(v => !v);
+              setAttentionOpen(false);
+            }}
+            className={`p-2 rounded-xl transition-colors border ${
+              filterActive
+                ? "bg-violet-600/20 border-violet-500/40 text-violet-300"
+                : "bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-400 hover:text-zinc-100"
+            }`}
+            title="Filters"
+          >
+            <SlidersHorizontal size={18} />
+          </button>
+          <button
             onClick={() => openDrawer()}
             className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors"
           >
@@ -153,11 +224,18 @@ export function Dashboard() {
             <Settings size={18} />
           </button>
         </div>
-      </div>
 
-      {/* Filter bar — scoped to CC Outstanding in Cash Flow */}
-      <div className="mb-4">
-        <DashboardFilterBar filters={filters} onChange={setFilters} active={filterActive} />
+        {attentionOpen && (
+          <div ref={attentionRef} className="absolute right-20 top-14 w-[420px] z-30">
+            <AttentionSection items={dashSummary?.attention_items ?? []} loading={lDash && !dashSummary} />
+          </div>
+        )}
+
+        {filterOpen && (
+          <div ref={filterRef} className="absolute right-0 top-14 w-[520px] z-30 rounded-2xl border border-zinc-800 bg-zinc-900 p-3 shadow-2xl">
+            <DashboardFilterBar filters={filters} onChange={setFilters} active={filterActive} />
+          </div>
+        )}
       </div>
 
       <ResizableGrid

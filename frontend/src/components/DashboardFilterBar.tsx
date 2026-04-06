@@ -11,10 +11,7 @@ interface Props {
 const FILTER_KEY = "dashboard-filters";
 
 export const DEFAULT_FILTERS: DashboardFilters = {
-  dateFrom: "",
-  dateTo: "",
-  includeBilled: true,
-  includeUnbilled: true,
+  asOfDate: "",
 };
 
 export function loadFilters(): DashboardFilters {
@@ -27,7 +24,7 @@ export function saveFilters(f: DashboardFilters) {
 }
 
 export function isFilterActive(f: DashboardFilters): boolean {
-  return !!(f.dateFrom || f.dateTo || !f.includeBilled || !f.includeUnbilled);
+  return !!f.asOfDate;
 }
 
 export function DashboardFilterBar({ filters, onChange, active }: Props) {
@@ -54,48 +51,15 @@ export function DashboardFilterBar({ filters, onChange, active }: Props) {
         Filter
       </div>
 
-      {/* Date range */}
+      {/* As-of date */}
       <div className="flex items-center gap-2">
-        <label className="text-xs text-zinc-500">From</label>
+        <label className="text-xs text-zinc-500">As Of</label>
         <input
           type="date"
-          value={filters.dateFrom}
-          onChange={e => set({ dateFrom: e.target.value })}
+          value={filters.asOfDate}
+          onChange={e => set({ asOfDate: e.target.value })}
           className="bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-violet-500 transition-colors"
         />
-        <label className="text-xs text-zinc-500">To</label>
-        <input
-          type="date"
-          value={filters.dateTo}
-          onChange={e => set({ dateTo: e.target.value })}
-          className="bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-violet-500 transition-colors"
-        />
-      </div>
-
-      {/* Billed / Unbilled toggles */}
-      <div className="flex items-center gap-1 bg-zinc-800 rounded-lg p-0.5 border border-zinc-700">
-        <button
-          onClick={() => set({ includeBilled: !filters.includeBilled })}
-          className={cn(
-            "px-3 py-1 rounded-md text-xs font-medium transition-colors",
-            filters.includeBilled
-              ? "bg-violet-600 text-white"
-              : "text-zinc-500 hover:text-zinc-300",
-          )}
-        >
-          Billed
-        </button>
-        <button
-          onClick={() => set({ includeUnbilled: !filters.includeUnbilled })}
-          className={cn(
-            "px-3 py-1 rounded-md text-xs font-medium transition-colors",
-            filters.includeUnbilled
-              ? "bg-violet-600 text-white"
-              : "text-zinc-500 hover:text-zinc-300",
-          )}
-        >
-          Unbilled
-        </button>
       </div>
 
       {/* Reset */}
@@ -109,10 +73,6 @@ export function DashboardFilterBar({ filters, onChange, active }: Props) {
         </button>
       )}
 
-      {/* Neither selected warning */}
-      {!filters.includeBilled && !filters.includeUnbilled && (
-        <span className="text-xs text-amber-400 ml-1">No transaction type selected — CC total will show as —</span>
-      )}
     </div>
   );
 }

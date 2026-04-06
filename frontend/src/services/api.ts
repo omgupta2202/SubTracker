@@ -3,7 +3,7 @@ import type {
   BankAccount, Receivable, CapExItem, Rent,
   SmartAllocationResponse,
   DailyLogMeta, DailyLogComparison,
-  CardTransaction, CardStatement,
+  DashboardSummary, MonthlyBurnItem, FinancialAccount, Obligation,
 } from "@/types";
 
 const BASE = "/api";
@@ -119,26 +119,6 @@ export const updateUser = (d: { name?: string; email?: string; password?: string
 export const deleteUser = () =>
   request<{ message: string }>("/auth/me", { method: "DELETE" });
 
-// ── Card Transactions ──────────────────────────────────────────────────────
-export interface TxnFilters { dateFrom?: string; dateTo?: string; type?: "billed" | "unbilled" | "all" }
-
-export const getCardTransactions = (cardId: string, f: TxnFilters = {}) => {
-  const p = new URLSearchParams();
-  if (f.dateFrom) p.set("date_from", f.dateFrom);
-  if (f.dateTo)   p.set("date_to",   f.dateTo);
-  if (f.type)     p.set("type",      f.type);
-  return request<CardTransaction[]>(`/cards/${cardId}/transactions?${p}`);
-};
-export const addCardTransaction = (cardId: string, d: { description: string; amount: number; txn_date?: string }) =>
-  request<CardTransaction>(`/cards/${cardId}/transactions`, { method: "POST", body: JSON.stringify(d) });
-export const deleteCardTransaction = (cardId: string, txnId: string) =>
-  request<{ deleted: string }>(`/cards/${cardId}/transactions/${txnId}`, { method: "DELETE" });
-
-export const getCardStatements = (cardId: string) =>
-  request<CardStatement[]>(`/cards/${cardId}/statements`);
-export const closeCardStatement = (cardId: string, d: { statement_date: string; due_date: string; minimum_due?: number }) =>
-  request<CardStatement>(`/cards/${cardId}/statements`, { method: "POST", body: JSON.stringify(d) });
-
 export interface PeriodSummary {
   total_liquid: number;
   cc_total: number;
@@ -151,16 +131,172 @@ export interface PeriodSummary {
   cash_flow_gap: number;
   cc_source: "transactions" | "outstanding";
   is_period: boolean;
+  billed_statement_status?: "all" | "paid" | "unpaid";
 }
 
-export const getPeriodSummary = (p: { dateFrom?: string; dateTo?: string; includeBilled?: boolean; includeUnbilled?: boolean }) => {
+export const getPeriodSummary = (p: {
+  dateFrom?: string;
+  dateTo?: string;
+  includeBilled?: boolean;
+  includeUnbilled?: boolean;
+  billedStatementStatus?: "all" | "paid" | "unpaid";
+}) => {
   const qs = new URLSearchParams();
   if (p.dateFrom)                      qs.set("date_from",        p.dateFrom);
   if (p.dateTo)                        qs.set("date_to",          p.dateTo);
   if (p.includeBilled   !== undefined) qs.set("include_billed",   String(p.includeBilled));
   if (p.includeUnbilled !== undefined) qs.set("include_unbilled", String(p.includeUnbilled));
+  if (p.billedStatementStatus)         qs.set("billed_statement_status", p.billedStatementStatus);
   return request<PeriodSummary>(`/cards/summary/period?${qs}`);
 };
+
+// ── Dashboard (Ledger-derived) ─────────────────────────────────────────────
+export const getDashboardSummary = () =>
+  request<DashboardSummary>("/dashboard/summary");
+export const getDashboardMonthlyBurn = (months = 6) =>
+  request<MonthlyBurnItem[]>(`/dashboard/monthly-burn?months=${months}`);
+export interface CashFlowCategory { category: string; total: number; count: number }
+export interface DashboardCashFlow {
+  date_from: string; date_to: string;
+  inflows: CashFlowCategory[]; outflows: CashFlowCategory[];
+  total_inflows: number; total_outflows: number; net: number;
+}
+export const getDashboardCashFlow = (dateFrom?: string, dateTo?: string) => {
+  const p = new URLSearchParams();
+  if (dateFrom) p.set("date_from", dateFrom);
+  if (dateTo)   p.set("date_to",   dateTo);
+  return request<DashboardCashFlow>(`/dashboard/cash-flow?${p}`);
+};
+export const getDashboardUtilization = () =>
+  request<{ id: string; name: string; last4: string | null; outstanding: number; credit_limit: number | null; utilization_pct: number | null; available_credit: number | null }[]>("/dashboard/utilization");
+
+// ── Financial Accounts (Ledger) ────────────────────────────────────────────
+export const getFinancialAccounts = (kind?: FinancialAccount["kind"]) => {
+  const p = kind ? `?kind=${kind}` : "";
+  return request<FinancialAccount[]>(`/financial-accounts/${p}`);
+};
+export const createFinancialAccount = (d: Partial<FinancialAccount> & { kind: FinancialAccount["kind"]; name: string }) =>
+  request<FinancialAccount>("/financial-accounts/", { method: "POST", body: JSON.stringify(d) });
+export const updateFinancialAccount = (id: string, d: Partial<FinancialAccount>) =>
+  request<FinancialAccount>(`/financial-accounts/${id}`, { method: "PUT", body: JSON.stringify(d) });
+export const deleteFinancialAccount = (id: string) =>
+  request<{ deleted: boolean }>(`/financial-accounts/${id}`, { method: "DELETE" });
+export const getFinancialAccountBalance = (id: string, asOf?: string) =>
+  request<{ account_id: string; balance?: number; outstanding?: number; minimum_due?: number }>(
+    `/financial-accounts/${id}/balance${asOf ? `?as_of=${asOf}` : ""}`
+  );
+export interface AccountLedgerEntry {
+  id: string;
+  account_id: string;
+  direction: "debit" | "credit";
+  amount: number;
+  description: string;
+  category: string;
+  effective_date: string;
+  status: string;
+  created_at: string;
+  billing_cycle_id?: string | null;
+  billing_statement_date?: string | null;
+  billing_due_date?: string | null;
+  is_billed?: boolean;
+}
+export const getFinancialAccountLedger = (
+  id: string,
+  p: { dateFrom?: string; dateTo?: string; category?: string; limit?: number; offset?: number } = {}
+) => {
+  const qs = new URLSearchParams();
+  if (p.dateFrom) qs.set("date_from", p.dateFrom);
+  if (p.dateTo) qs.set("date_to", p.dateTo);
+  if (p.category) qs.set("category", p.category);
+  if (p.limit !== undefined) qs.set("limit", String(p.limit));
+  if (p.offset !== undefined) qs.set("offset", String(p.offset));
+  return request<{ entries: AccountLedgerEntry[]; current_balance: number; count: number }>(
+    `/financial-accounts/${id}/ledger?${qs}`
+  );
+};
+export const createLedgerEntry = (d: {
+  account_id: string;
+  direction: "debit" | "credit";
+  amount: number;
+  description: string;
+  effective_date?: string;
+  category?: string;
+  merchant?: string;
+  billing_cycle_id?: string;
+}) =>
+  request<AccountLedgerEntry>("/ledger/", { method: "POST", body: JSON.stringify(d) });
+
+export interface BillingCycle {
+  id: string;
+  account_id: string;
+  cycle_start?: string;
+  cycle_end?: string;
+  statement_date: string;
+  due_date: string;
+  total_billed: number;
+  minimum_due: number;
+  total_paid: number;
+  balance_due: number;
+  is_closed: boolean;
+  statement_status?: "unbilled" | "paid" | "unpaid" | "partial";
+  card_name?: string;
+  bank?: string;
+}
+export const getBillingCycles = (p: { accountId?: string; openOnly?: boolean; limit?: number } = {}) => {
+  const qs = new URLSearchParams();
+  if (p.accountId) qs.set("account_id", p.accountId);
+  if (p.openOnly !== undefined) qs.set("open_only", String(p.openOnly));
+  if (p.limit !== undefined) qs.set("limit", String(p.limit));
+  return request<BillingCycle[]>(`/billing-cycles/?${qs}`);
+};
+export const closeBillingCycle = (cycleId: string, d: { total_billed?: number; minimum_due?: number } = {}) =>
+  request<BillingCycle>(`/billing-cycles/${cycleId}/close`, { method: "POST", body: JSON.stringify(d) });
+export const updateBillingCycle = (
+  cycleId: string,
+  d: { cycle_start?: string; cycle_end?: string; statement_date?: string; due_date?: string; total_billed?: number; minimum_due?: number; total_paid?: number }
+) =>
+  request<BillingCycle>(`/billing-cycles/${cycleId}`, { method: "PUT", body: JSON.stringify(d) });
+export const deleteBillingCycle = (cycleId: string) =>
+  request<{ deleted: boolean; id: string }>(`/billing-cycles/${cycleId}`, { method: "DELETE" });
+export const createBillingCycleForCard = (
+  accountId: string,
+  d: {
+    statement_period?: "current" | "last";
+    statement_date?: string;
+    due_date?: string;
+    cycle_start?: string;
+    cycle_end?: string;
+    total_billed?: number;
+    minimum_due?: number;
+  }
+) =>
+  request<BillingCycle>(`/financial-accounts/${accountId}/billing-cycles`, { method: "POST", body: JSON.stringify(d) });
+export const reopenBillingCycle = (cycleId: string) =>
+  request<BillingCycle>(`/billing-cycles/${cycleId}/reopen`, { method: "POST" });
+export const getBillingCycleOverview = (accountId: string) =>
+  request<{ account_id: string; current_cycle: BillingCycle | null; last_statement: BillingCycle | null; past_statements: BillingCycle[] }>(
+    `/billing-cycles/account/${accountId}/overview`
+  );
+
+// ── Obligations (Unified: subscriptions + EMIs + rent) ────────────────────
+export const getObligations = (type?: "subscription" | "emi" | "rent" | "insurance" | "sip" | "utility" | "other") => {
+  const p = type ? `?type=${type}` : "";
+  return request<Obligation[]>(`/obligations/${p}`);
+};
+export const createObligation = (d: Partial<Obligation>) =>
+  request<Obligation>("/obligations/", { method: "POST", body: JSON.stringify(d) });
+export const updateObligation = (id: string, d: Partial<Obligation>) =>
+  request<Obligation>(`/obligations/${id}`, { method: "PUT", body: JSON.stringify(d) });
+export const deleteObligation = (id: string) =>
+  request<{ deleted: boolean }>(`/obligations/${id}`, { method: "DELETE" });
+export const getUpcomingObligations = (days = 30) =>
+  request<{ id: string; obligation_id: string; name: string; type: string; amount_due: number; amount_paid: number; due_date: string; days_until_due: number; balance_due: number }[]>(`/obligations/upcoming?days=${days}`);
+
+// ── Payments ───────────────────────────────────────────────────────────────
+export const initiatePayment = (d: { from_account_id: string; to_entity_type: "billing_cycle" | "obligation" | "receivable" | "account" | "other"; to_entity_id?: string; amount: number; billing_cycle_id?: string; payment_method?: string; reference_number?: string; note?: string }) =>
+  request<{ id: string; status: string }>("/payments", { method: "POST", body: JSON.stringify(d) });
+export const settlePayment = (id: string, applied_amount?: number) =>
+  request<{ id: string; status: string }>(`/payments/${id}/settle`, { method: "POST", body: JSON.stringify({ applied_amount }) });
 
 // ── Daily Logs ─────────────────────────────────────────────────────────────
 export const getDailyLogs = (limit = 90) =>

@@ -1,13 +1,30 @@
 import { useState } from "react";
-import type { BankAccount, CreditCard } from "@/types";
 import { formatINR } from "@/lib/utils";
 import { Wallet, ChevronDown, ChevronUp, CreditCard as CardIcon } from "lucide-react";
 import { EditableRow, IField, IGrid, iCls, ISaveCancel } from "./InlineEdit";
 import * as api from "@/services/api";
 
+interface LiquidAccount {
+  id: string;
+  name: string;
+  balance: number;
+  bank?: string;
+}
+
+interface CreditCardSnapshot {
+  id: string;
+  name: string;
+  bank?: string;
+  last4?: string | null;
+  outstanding: number;
+  minimum_due: number;
+  due_date_offset?: number;
+  due_day?: number | null;
+}
+
 interface Props {
-  accounts: BankAccount[];
-  cards: CreditCard[];
+  accounts: LiquidAccount[];
+  cards: CreditCardSnapshot[];
   rent?: number;
   onRefetch: () => void;
   onManageAccounts?: () => void;
@@ -18,13 +35,12 @@ const BANK_COLOR: Record<string, string> = {
 };
 const bankColor = (b: string) => BANK_COLOR[b] ?? "bg-zinc-500";
 
-function AccountRow({ account, onRefetch }: { account: BankAccount; onRefetch: () => void }) {
+function AccountRow({ account, onRefetch }: { account: LiquidAccount; onRefetch: () => void }) {
   const [editing, setEditing] = useState(false);
-  const [balance, setBalance] = useState(String(account.balance));
   const [name, setName] = useState(account.name);
 
   async function save() {
-    await api.updateAccount(account.id, { name, balance: Number(balance) });
+    await api.updateFinancialAccount(account.id, { name });
     setEditing(false);
     onRefetch();
   }
@@ -39,16 +55,13 @@ function AccountRow({ account, onRefetch }: { account: BankAccount; onRefetch: (
             <IField label="Account Name">
               <input className={iCls} value={name} onChange={e => setName(e.target.value)} />
             </IField>
-            <IField label="Balance (₹)">
-              <input className={iCls} type="number" value={balance} onChange={e => setBalance(e.target.value)} />
-            </IField>
           </IGrid>
           <ISaveCancel onSave={save} onCancel={() => setEditing(false)} />
         </>
       }
     >
       <div className="flex items-center gap-3 py-0.5 pr-8">
-        <span className={`w-2 h-2 rounded-full shrink-0 ${bankColor(account.bank)}`} />
+        <span className={`w-2 h-2 rounded-full shrink-0 ${bankColor(account.bank ?? "Bank")}`} />
         <span className="text-sm text-zinc-400 flex-1 truncate">{account.name}</span>
         <span className="font-mono text-sm text-zinc-200 shrink-0">{formatINR(account.balance)}</span>
       </div>
@@ -56,13 +69,13 @@ function AccountRow({ account, onRefetch }: { account: BankAccount; onRefetch: (
   );
 }
 
-function CardRow({ card, onRefetch }: { card: CreditCard; onRefetch: () => void }) {
+function CardRow({ card, onRefetch }: { card: CreditCardSnapshot; onRefetch: () => void }) {
   const [editing, setEditing] = useState(false);
-  const [outstanding, setOutstanding] = useState(String(card.outstanding));
-  const [minDue, setMinDue] = useState(String(card.minimum_due));
+  const [name, setName] = useState(card.name);
+  const dueOffset = card.due_date_offset ?? 999;
 
   async function save() {
-    await api.updateCard(card.id, { outstanding: Number(outstanding), minimum_due: Number(minDue) });
+    await api.updateFinancialAccount(card.id, { name });
     setEditing(false);
     onRefetch();
   }
@@ -73,15 +86,9 @@ function CardRow({ card, onRefetch }: { card: CreditCard; onRefetch: () => void 
       onStartEdit={() => setEditing(true)}
       form={
         <>
-          <p className="text-xs font-semibold text-zinc-300">{card.name}{card.last4 ? ` ···· ${card.last4}` : ""}</p>
-          <IGrid>
-            <IField label="Outstanding (₹)">
-              <input className={iCls} type="number" value={outstanding} onChange={e => setOutstanding(e.target.value)} />
-            </IField>
-            <IField label="Minimum Due (₹)">
-              <input className={iCls} type="number" value={minDue} onChange={e => setMinDue(e.target.value)} />
-            </IField>
-          </IGrid>
+          <IField label="Card Name">
+            <input className={iCls} value={name} onChange={e => setName(e.target.value)} />
+          </IField>
           <ISaveCancel onSave={save} onCancel={() => setEditing(false)} />
         </>
       }
@@ -96,14 +103,14 @@ function CardRow({ card, onRefetch }: { card: CreditCard; onRefetch: () => void 
             <p className="font-mono text-sm font-semibold text-red-400">{formatINR(card.outstanding)}</p>
             <p className="text-xs text-zinc-500">
               {card.due_day ? `bill day ${card.due_day}` : ""}
-              {card.due_date_offset === 0 ? " · due today" : card.due_date_offset <= 7 ? ` · ${card.due_date_offset}d left` : ""}
+              {dueOffset === 0 ? " · due today" : dueOffset <= 7 ? ` · ${dueOffset}d left` : ""}
             </p>
           </div>
         </div>
         <div className="h-1.5 rounded-full bg-zinc-700 overflow-hidden">
           <div className="h-full rounded-full bg-red-500/70" style={{ width: card.outstanding > 0 ? `${Math.min((card.minimum_due / card.outstanding) * 100, 100)}%` : "0%" }} />
         </div>
-        <p className="text-xs text-zinc-600 mt-1">Min due {formatINR(card.minimum_due)} · {card.bank}</p>
+        <p className="text-xs text-zinc-600 mt-1">Min due {formatINR(card.minimum_due)}{card.bank ? ` · ${card.bank}` : ""}</p>
       </div>
     </EditableRow>
   );
@@ -116,7 +123,8 @@ export function NetWorthCard({ accounts, cards, rent = 0, onRefetch, onManageAcc
   const netAfterCC  = totalLiquid - totalCC - rent;
 
   return (
-    <div className="bg-zinc-900 p-6 flex flex-col gap-4 backdrop-blur-sm">
+    <div className="relative overflow-x-hidden overflow-y-auto min-h-0 bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-800 p-6 flex flex-col gap-4 backdrop-blur-sm border border-zinc-700/60">
+      <div className="absolute -top-20 -right-16 w-56 h-56 rounded-full bg-violet-500/10 blur-3xl pointer-events-none" />
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-zinc-400 text-sm font-medium">
           <Wallet size={16} className="text-violet-400" />
@@ -164,7 +172,7 @@ export function NetWorthCard({ accounts, cards, rent = 0, onRefetch, onManageAcc
         {showCards ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
       </button>
       {showCards && (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 pt-1">
           {cards.map(c => <CardRow key={c.id} card={c} onRefetch={onRefetch} />)}
         </div>
       )}

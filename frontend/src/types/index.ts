@@ -24,6 +24,7 @@ export interface CreditCard {
   last4: string;
   outstanding: number;
   minimum_due: number;
+  credit_limit?: number;
   due_date_offset: number;
   due_day: number | null;
 }
@@ -51,28 +52,39 @@ export interface CapExItem {
 }
 
 export interface AllocationItem {
-  card: string;
-  amount: number;
-  pay_from: string;
+  card?: string;
+  card_name?: string;
+  amount?: number;
+  allocatable?: number;
+  balance_due?: number;
+  pay_from?: string;
+  from_account_name?: string | null;
   due_date: string;
-  days_left: number;
-  feasible: boolean;
+  days_left?: number;
+  can_pay_minimum?: boolean;
+  feasible?: boolean;
 }
 
 export interface PostBalance {
-  account: string;
-  original: number;
-  remaining: number;
+  account?: string;
+  account_name?: string;
+  original?: number;
+  before?: number;
+  remaining?: number;
+  after?: number;
 }
 
 export interface AllocationSummary {
   total_liquid: number;
   total_cc_outstanding: number;
+  total_cc_minimum_due?: number;
   net_after_cc: number;
-  total_receivables: number;
-  total_capex: number;
+  total_receivables?: number;
+  total_receivables_30d?: number;
+  total_capex?: number;
+  total_capex_planned?: number;
   cash_flow_gap: number;
-  rent: number;
+  rent?: number;
 }
 
 export interface SmartAllocationResponse {
@@ -82,6 +94,7 @@ export interface SmartAllocationResponse {
 }
 
 export interface Rent {
+  id?: string;
   amount: number;
   due_day: number;
 }
@@ -156,10 +169,108 @@ export interface CardStatement {
 }
 
 export interface DashboardFilters {
-  dateFrom: string;
-  dateTo: string;
-  includeBilled: boolean;
-  includeUnbilled: boolean;
+  asOfDate: string;
+}
+
+// ── Ledger / New Architecture Types ───────────────────────────────────────────
+
+export interface DashboardAccount {
+  id: string;
+  name: string;
+  balance: number;
+}
+
+export interface DashboardCreditCard {
+  id: string;
+  name: string;
+  last4: string | null;
+  outstanding: number;
+  minimum_due: number;
+}
+
+export interface UpcomingObligation {
+  id: string;
+  obligation_id: string;
+  name: string;
+  type?: "subscription" | "emi" | "rent" | "insurance" | "sip" | "utility" | "other";
+  obligation_type?: "subscription" | "emi" | "rent";
+  amount_due: number;
+  amount_paid?: number;
+  balance_due?: number;
+  due_date: string;
+  days_until?: number;
+  days_until_due?: number;
+}
+
+export interface DashboardSummary {
+  total_liquid: number;
+  total_cc_outstanding: number;
+  total_cc_minimum_due: number;
+  credit_utilization_pct: number | null;
+  monthly_burn: number;
+  monthly_burn_trend_pct: number | null;
+  cash_flow_gap: number;
+  net_after_cc: number;
+  upcoming_obligations_30d: number;
+  total_receivables_30d: number;
+  total_capex_planned: number;
+  accounts: DashboardAccount[];
+  credit_cards: DashboardCreditCard[];
+  upcoming_dues_7d: UpcomingObligation[];
+  attention_items?: AttentionItem[];
+  as_of: string;
+}
+
+export interface AttentionItem {
+  id: string;
+  kind: "credit_card_due" | "obligation_due";
+  title: string;
+  due_date: string;
+  amount: number;
+  days_until_due: number;
+  account_id?: string;
+  obligation_id?: string;
+  obligation_type?: string;
+}
+
+export interface MonthlyBurnItem {
+  year: number;
+  month: number;
+  month_label: string;
+  burn: number;
+  income: number;
+  net: number;
+}
+
+export interface FinancialAccount {
+  id: string;
+  name: string;
+  kind: "bank" | "wallet" | "cash" | "credit_card" | "bnpl" | "investment";
+  institution: string;
+  is_active: boolean;
+  balance?: number;
+  outstanding?: number;
+  minimum_due?: number;
+  last4?: string;
+  credit_limit?: number;
+  billing_cycle_day?: number | null;
+  due_offset_days?: number | null;
+}
+
+export interface Obligation {
+  id: string;
+  type: "subscription" | "emi" | "rent" | "insurance" | "sip" | "utility" | "other";
+  name: string;
+  category?: string;
+  amount: number;
+  frequency: "monthly" | "yearly" | "weekly" | "quarterly" | "half_yearly" | "one_time";
+  anchor_date: string;
+  due_day: number | null;
+  status: "active" | "paused" | "cancelled" | "completed";
+  total_installments?: number;
+  completed_installments?: number;
+  remaining_installments?: number;
+  lender?: string;
 }
 
 export type CardId =

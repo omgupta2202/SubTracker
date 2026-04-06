@@ -1,7 +1,10 @@
-from flask import Blueprint, g
-from db import fetchall, fetchone
-from utils import ok, err, days_until
-from services.allocation import compute
+"""
+Smart allocation route.
+Backed by the new AllocationEngine (ledger-derived balances).
+"""
+from flask import Blueprint, request, g
+from utils import ok, err
+from services.allocation_engine import compute, invalidate, AllocationError
 
 bp = Blueprint("allocation", __name__, url_prefix="/api/smart-allocation")
 
@@ -9,15 +12,10 @@ bp = Blueprint("allocation", __name__, url_prefix="/api/smart-allocation")
 @bp.get("")
 def smart_allocation():
     try:
-        cards_raw   = fetchall("SELECT * FROM credit_cards WHERE user_id = %s", (g.user_id,))
-        accounts    = fetchall("SELECT * FROM bank_accounts WHERE user_id = %s AND deleted_at IS NULL", (g.user_id,))
-        receivables = fetchall("SELECT * FROM receivables WHERE user_id = %s", (g.user_id,))
-        capex_items = fetchall("SELECT * FROM capex_items WHERE user_id = %s", (g.user_id,))
-        rent_row    = fetchone("SELECT amount FROM rent_config WHERE user_id = %s", (g.user_id,))
+        force = request.args.get("refresh", "false").lower() == "true"
+        result = compute(g.user_id, force_refresh=force)
+        return ok(result)
+    except AllocationError as e:
+        return err(str(e), e.status)
     except Exception as exc:
-        return err(f"Database error: {exc}", 500)
-
-    cards = [{**c, "due_date_offset": days_until(c["due_day"])} for c in cards_raw]
-    rent_amount = float(rent_row["amount"]) if rent_row else 0.0
-
-    return ok(compute(cards, accounts, receivables, capex_items, rent_amount))
+        return err(f"Allocation error: {exc}", 500)

@@ -31,6 +31,7 @@ def get_period_summary(
     date_to: Optional[str] = None,
     include_billed: bool = True,
     include_unbilled: bool = True,
+    billed_statement_status: str = "all",
 ) -> dict:
     from_dt = date.fromisoformat(date_from) if date_from else None
     to_dt   = date.fromisoformat(date_to)   if date_to   else None
@@ -41,17 +42,43 @@ def get_period_summary(
     total_liquid = sum(float(a["balance"]) for a in accounts)
 
     # ── CC ─────────────────────────────────────────────────────────────────
-    # Use card_transactions when they exist, fall back to outstanding field.
-    has_txn = fetchone(
-        "SELECT COUNT(*) AS cnt FROM card_transactions WHERE user_id = %s", (user_id,)
+    # Preferred: v2 ledger + billing cycles.
+    # Fallback: legacy card_transactions, then credit_cards.outstanding.
+    status = (billed_statement_status or "all").lower()
+    if status not in ("all", "paid", "unpaid"):
+        status = "all"
+
+    has_v2_cc = fetchone(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM financial_accounts
+        WHERE user_id=%s AND kind='credit_card' AND deleted_at IS NULL
+        """,
+        (user_id,)
     )
-    if has_txn and int(has_txn["cnt"]) > 0:
-        cc_total = get_filtered_cc_total(user_id, date_from, date_to, include_billed, include_unbilled)
+    if has_v2_cc and int(has_v2_cc["cnt"]) > 0:
+        cc_total = _get_filtered_cc_total_v2(
+            user_id=user_id,
+            date_from=date_from,
+            date_to=date_to,
+            include_billed=include_billed,
+            include_unbilled=include_unbilled,
+            billed_statement_status=status,
+        )
         cc_source = "transactions"
     else:
-        cards    = fetchall("SELECT outstanding FROM credit_cards WHERE user_id = %s", (user_id,))
-        cc_total = sum(float(c["outstanding"]) for c in cards)
-        cc_source = "outstanding"
+        has_txn = fetchone(
+            "SELECT COUNT(*) AS cnt FROM card_transactions WHERE user_id = %s", (user_id,)
+        )
+        if has_txn and int(has_txn["cnt"]) > 0:
+            cc_total = get_filtered_cc_total(
+                user_id, date_from, date_to, include_billed, include_unbilled, status
+            )
+            cc_source = "transactions"
+        else:
+            cards    = fetchall("SELECT outstanding FROM credit_cards WHERE user_id = %s", (user_id,))
+            cc_total = sum(float(c["outstanding"]) for c in cards)
+            cc_source = "outstanding"
 
     # ── Subscriptions ──────────────────────────────────────────────────────
     subs       = fetchall("SELECT amount, due_day, billing_cycle FROM subscriptions WHERE user_id = %s", (user_id,))
@@ -122,5 +149,109 @@ def get_period_summary(
         "net_after_cc":      net_after_cc,
         "cash_flow_gap":     cash_flow_gap,
         "cc_source":         cc_source,
+        "billed_statement_status": status,
         "is_period":         period,
     }
+
+
+def _get_filtered_cc_total_v2(
+    user_id: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    include_billed: bool = True,
+    include_unbilled: bool = True,
+    billed_statement_status: str = "all",
+) -> float:
+    """
+    Sum credit-card debit ledger entries with billed/unbilled selection.
+    billed_statement_status applies only to billed entries:
+      - paid:   billed cycle balance_due <= 0
+      - unpaid: billed cycle balance_due > 0
+      - all:    any billed cycle
+    """
+    if not include_billed and not include_unbilled:
+        return 0.0
+
+    conditions = [
+        "le.user_id = %s",
+        "le.direction = 'debit'",
+        "le.status = 'posted'",
+        "le.deleted_at IS NULL",
+        "fa.kind = 'credit_card'",
+        "fa.deleted_at IS NULL",
+    ]
+    params: list = [user_id]
+
+    if date_from:
+        conditions.append("le.effective_date >= %s")
+        params.append(date_from)
+    if date_to:
+        conditions.append("le.effective_date <= %s")
+        params.append(date_to)
+
+    billed_parts = []
+    if include_billed:
+        if billed_statement_status == "paid":
+            billed_parts.append(
+                """
+                EXISTS (
+                  SELECT 1
+                  FROM billing_cycle_entries bce
+                  JOIN billing_cycles bc ON bc.id = bce.billing_cycle_id
+                  WHERE bce.ledger_entry_id = le.id
+                    AND bc.deleted_at IS NULL
+                    AND bc.is_closed = TRUE
+                    AND COALESCE(bc.balance_due, 0) <= 0
+                )
+                """
+            )
+        elif billed_statement_status == "unpaid":
+            billed_parts.append(
+                """
+                EXISTS (
+                  SELECT 1
+                  FROM billing_cycle_entries bce
+                  JOIN billing_cycles bc ON bc.id = bce.billing_cycle_id
+                  WHERE bce.ledger_entry_id = le.id
+                    AND bc.deleted_at IS NULL
+                    AND bc.is_closed = TRUE
+                    AND COALESCE(bc.balance_due, 0) > 0
+                )
+                """
+            )
+        else:
+            billed_parts.append(
+                """
+                EXISTS (
+                  SELECT 1
+                  FROM billing_cycle_entries bce
+                  JOIN billing_cycles bc ON bc.id = bce.billing_cycle_id
+                  WHERE bce.ledger_entry_id = le.id
+                    AND bc.deleted_at IS NULL
+                )
+                """
+            )
+
+    if include_unbilled:
+        billed_parts.append(
+            """
+            NOT EXISTS (
+              SELECT 1 FROM billing_cycle_entries bce
+              WHERE bce.ledger_entry_id = le.id
+            )
+            """
+        )
+
+    conditions.append(f"({' OR '.join(billed_parts)})")
+
+    where = " AND ".join(conditions)
+    row = fetchone(
+        f"""
+        SELECT COALESCE(SUM(le.amount), 0) AS total
+        FROM ledger_entries le
+        JOIN financial_accounts fa ON fa.id = le.account_id
+        WHERE {where}
+        """,
+        tuple(params),
+    )
+    return float(row["total"] if row else 0.0)

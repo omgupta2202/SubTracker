@@ -10,7 +10,17 @@ export function useSubscriptions() {
   const fetch = useCallback(async () => {
     try {
       setLoading(true);
-      setSubscriptions(await api.getSubscriptions());
+      const rows = await api.getObligations("subscription");
+      setSubscriptions(rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        amount: r.amount,
+        billing_cycle: (r.frequency === "monthly" || r.frequency === "weekly" || r.frequency === "yearly")
+          ? r.frequency
+          : "monthly",
+        due_day: r.due_day ?? 1,
+        category: "Recurring",
+      })));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load subscriptions");

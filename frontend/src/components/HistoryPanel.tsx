@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, History, GitCompare, Camera, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { X, History, GitCompare, Camera, TrendingUp, TrendingDown } from "lucide-react";
 import { getDailyLogs, captureDailyLog, compareDailyLogs } from "@/services/api";
 import type { DailyLogMeta, DailyLogComparison, DiffValue, DiffEntity } from "@/types";
 import { formatINR } from "@/lib/utils";
@@ -299,7 +299,7 @@ function EntityRows({
   const multiField = fields.length > 1;
 
   if (!multiField) {
-    const [fieldKey, fieldLabel] = fields[0];
+    const [fieldKey] = fields[0];
     const dv = entity.fields[fieldKey];
     return (
       <TableRow
@@ -398,8 +398,6 @@ export function HistoryPanel({ open, onClose }: Props) {
   }
 
   if (!open) return null;
-
-  const activeNav = NAV.find(n => n.id === view)!;
 
   return (
     <div className="fixed inset-0 z-50 flex items-stretch">

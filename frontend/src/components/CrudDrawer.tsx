@@ -185,9 +185,9 @@ function CardForm({ initial, onSave, onCancel }: { initial?: CreditCard; onSave:
   const [name, setName] = useState(initial?.name ?? "");
   const [bank, setBank] = useState(initial?.bank ?? "");
   const [last4, setLast4] = useState(initial?.last4 ?? "");
-  const [outstanding, setOutstanding] = useState(String(initial?.outstanding ?? ""));
-  const [minDue, setMinDue] = useState(String(initial?.minimum_due ?? ""));
-  const [dueDay, setDueDay] = useState(String(initial?.due_day ?? "1"));
+  const [creditLimit, setCreditLimit] = useState(String(initial?.credit_limit ?? ""));
+  const [dueDay, setDueDay] = useState(String(initial?.due_day ?? "5"));
+  const [dueOffset, setDueOffset] = useState(String(initial?.due_date_offset ?? "20"));
   return (
     <div className="flex flex-col gap-5">
       <FormSection title="Card Identity">
@@ -205,18 +205,27 @@ function CardForm({ initial, onSave, onCancel }: { initial?: CreditCard; onSave:
       </FormSection>
       <FormSection title="Billing">
         <FormGrid>
-          <Field label="Outstanding" hint="₹">
-            <input className={inputCls} type="number" value={outstanding} onChange={e => setOutstanding(e.target.value)} />
+          <Field label="Credit Limit" hint="₹">
+            <input className={inputCls} type="number" value={creditLimit} onChange={e => setCreditLimit(e.target.value)} />
           </Field>
-          <Field label="Minimum Due" hint="₹">
-            <input className={inputCls} type="number" value={minDue} onChange={e => setMinDue(e.target.value)} />
+          <Field label="Statement Day" hint="1 – 31">
+            <input className={inputCls} type="number" min={1} max={31} value={dueDay} onChange={e => setDueDay(e.target.value)} />
           </Field>
         </FormGrid>
-        <Field label="Bill Due Day" hint="1 – 31">
-          <input className={inputCls} type="number" min={1} max={31} value={dueDay} onChange={e => setDueDay(e.target.value)} />
+        <Field label="Payment Due Offset" hint="days after statement">
+          <input className={inputCls} type="number" min={1} max={60} value={dueOffset} onChange={e => setDueOffset(e.target.value)} />
         </Field>
       </FormSection>
-      <SaveCancel onSave={() => onSave({ name, bank, last4, outstanding: Number(outstanding), minimum_due: Number(minDue), due_day: Number(dueDay), due_date_offset: 0 })} onCancel={onCancel} />
+      <SaveCancel onSave={() => onSave({
+        name,
+        bank,
+        last4,
+        credit_limit: creditLimit ? Number(creditLimit) : undefined,
+        outstanding: initial?.outstanding ?? 0,
+        minimum_due: initial?.minimum_due ?? 0,
+        due_day: Number(dueDay),
+        due_date_offset: Number(dueOffset),
+      })} onCancel={onCancel} />
     </div>
   );
 }
@@ -460,26 +469,106 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
   }, []);
   const [adding, setAdding] = useState(false);
   const [txnCardId, setTxnCardId] = useState<string | null>(null);
-  const reset = () => { setEditingId(null); setAdding(false); setTxnCardId(null); };
+  const [txnDefaultAddBill, setTxnDefaultAddBill] = useState(false);
+  const reset = () => { setEditingId(null); setAdding(false); setTxnCardId(null); setTxnDefaultAddBill(false); };
   const switchTab = (t: Tab) => { setTab(t); reset(); };
 
   async function saveSub(id: string | null, d: Omit<Subscription, "id">) {
-    try { if (id) await api.updateSubscription(id, d); else await api.createSubscription(d); }
+    try {
+      if (id) {
+        await api.updateObligation(id, {
+          name: d.name,
+          amount: d.amount,
+          frequency: d.billing_cycle === "monthly" || d.billing_cycle === "yearly" || d.billing_cycle === "weekly"
+            ? d.billing_cycle
+            : "monthly",
+          due_day: d.due_day,
+        });
+      } else {
+        await api.createObligation({
+          type: "subscription",
+          name: d.name,
+          amount: d.amount,
+          frequency: d.billing_cycle,
+          anchor_date: new Date().toISOString().slice(0, 10),
+          due_day: d.due_day,
+          category: d.category,
+        });
+      }
+    }
     catch (e) { console.error(e); }
     reset(); onRefetch();
   }
   async function saveEmi(id: string | null, d: Omit<EMI, "id">) {
-    try { if (id) await api.updateEmi(id, d); else await api.createEmi(d); }
+    try {
+      if (id) {
+        await api.updateObligation(id, {
+          name: d.name,
+          amount: d.amount,
+          total_installments: d.total_months,
+          completed_installments: d.paid_months,
+          due_day: d.due_day,
+          lender: d.lender,
+        });
+      } else {
+        await api.createObligation({
+          type: "emi",
+          name: d.name,
+          amount: d.amount,
+          frequency: "monthly",
+          anchor_date: new Date().toISOString().slice(0, 10),
+          due_day: d.due_day,
+          total_installments: d.total_months,
+          completed_installments: d.paid_months,
+          lender: d.lender,
+          category: "Loan",
+        });
+      }
+    }
     catch (e) { console.error(e); }
     reset(); onRefetch();
   }
   async function saveCard(id: string | null, d: Omit<CreditCard, "id">) {
-    try { if (id) await api.updateCard(id, d); else await api.createCard(d); }
+    try {
+      if (id) {
+        await api.updateFinancialAccount(id, {
+          name: d.name,
+          institution: d.bank,
+          last4: d.last4,
+          billing_cycle_day: d.due_day,
+          due_offset_days: d.due_date_offset,
+          credit_limit: d.credit_limit,
+        });
+      } else {
+        await api.createFinancialAccount({
+          kind: "credit_card",
+          name: d.name,
+          institution: d.bank,
+          last4: d.last4,
+          billing_cycle_day: d.due_day,
+          due_offset_days: d.due_date_offset,
+        } as any);
+      }
+    }
     catch (e) { console.error(e); }
     reset(); onRefetch();
   }
   async function saveAccount(id: string | null, d: Omit<BankAccount, "id">) {
-    try { if (id) await api.updateAccount(id, d); else await api.createAccount(d); }
+    try {
+      if (id) {
+        await api.updateFinancialAccount(id, {
+          name: d.name,
+          institution: d.bank,
+        });
+      } else {
+        await api.createFinancialAccount({
+          kind: "bank",
+          name: d.name,
+          institution: d.bank,
+          opening_balance: d.balance,
+        } as any);
+      }
+    }
     catch (e) { console.error(e); }
     reset(); onRefetch();
   }
@@ -494,7 +583,25 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
     reset(); onRefetch();
   }
   async function saveRent(d: Rent) {
-    try { await api.updateRent(d); } catch (e) { console.error(e); }
+    try {
+      if (rent.id) {
+        await api.updateObligation(rent.id, {
+          amount: d.amount,
+          due_day: d.due_day,
+          name: "House Rent",
+        });
+      } else {
+        await api.createObligation({
+          type: "rent",
+          name: "House Rent",
+          amount: d.amount,
+          frequency: "monthly",
+          anchor_date: new Date().toISOString().slice(0, 10),
+          due_day: d.due_day,
+          category: "Housing",
+        });
+      }
+    } catch (e) { console.error(e); }
     reset(); onRefetch();
   }
 
@@ -559,6 +666,8 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
   const activeNav = NAV.find(n => n.id === tab)!;
   const isRent = tab === "rent";
   const isProfile = tab === "profile";
+  const cardsOutstandingTotal = cards.reduce((sum, c) => sum + Number(c.outstanding || 0), 0);
+  const cardsMinimumDueTotal = cards.reduce((sum, c) => sum + Number(c.minimum_due || 0), 0);
 
   if (!open) return null;
 
@@ -631,9 +740,19 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
               {/* ── Add / Edit form panel ── */}
               {(adding || editingId) && (
                 <div className="rounded-2xl bg-zinc-900 border border-violet-500/30 p-6">
-                  <p className="text-xs font-semibold text-violet-400 uppercase tracking-widest mb-5">
-                    {editingId ? "Edit Entry" : "New Entry"}
-                  </p>
+                  <div className="flex items-center justify-between mb-5">
+                    <p className="text-xs font-semibold text-violet-400 uppercase tracking-widest">
+                      {editingId ? "Edit Entry" : "New Entry"}
+                    </p>
+                    <button
+                      onClick={reset}
+                      className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+                      aria-label="Close entry form"
+                      title="Close"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
                   {tab === "subscriptions" && (
                     editingId
                       ? <SubForm initial={subscriptions.find(s => s.id === editingId)} onSave={d => saveSub(editingId, d)} onCancel={reset} />
@@ -772,12 +891,19 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
               {/* ── Item lists ── */}
               {!isRent && !isProfile && !adding && !editingId && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {tab === "cards" && !txnCardId && (
+                    <div className="col-span-full rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
+                      <p className="text-xs uppercase tracking-wider text-red-300">Total Card Outstanding</p>
+                      <p className="font-mono text-xl font-semibold text-red-300 mt-1">{formatINR(cardsOutstandingTotal)}</p>
+                      <p className="text-xs text-zinc-400 mt-1">Total minimum due: {formatINR(cardsMinimumDueTotal)}</p>
+                    </div>
+                  )}
 
                   {tab === "accounts" && accounts.map(a => (
                     <ItemCard key={a.id} title={a.name} subtitle={a.bank} amount={formatINR(a.balance)}
                       onEdit={() => setEditingId(a.id)} onDelete={async () => { 
                         if (window.confirm(`Are you sure you want to delete account "${a.name}"?`)) {
-                          await api.deleteAccount(a.id); 
+                          await api.deleteFinancialAccount(a.id); 
                           onRefetch(); 
                         }
                       }} />
@@ -787,12 +913,7 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
                     const card = cards.find(c => c.id === txnCardId);
                     return card ? (
                       <div className="col-span-full">
-                        <div className="flex items-center gap-2 mb-4">
-                          <button onClick={() => setTxnCardId(null)} className="text-xs text-zinc-500 hover:text-zinc-200 transition-colors">← Back</button>
-                          <span className="text-xs text-zinc-600">/</span>
-                          <span className="text-xs font-semibold text-zinc-300">{card.name} — Transactions</span>
-                        </div>
-                        <CardTransactionPanel card={card} />
+                        <CardTransactionPanel card={card} defaultAddingBill={txnDefaultAddBill} onBack={() => { setTxnCardId(null); setTxnDefaultAddBill(false); }} />
                       </div>
                     ) : null;
                   })()}
@@ -800,20 +921,26 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
                   {tab === "cards" && !txnCardId && cards.map(c => (
                     <ItemCard key={c.id}
                       title={c.last4 ? `${c.name}  ···· ${c.last4}` : c.name}
-                      subtitle={`${c.bank} · bill day ${c.due_day}`}
+                      subtitle={`${c.bank} · stmt day ${c.due_day ?? "—"} · due in ${c.due_date_offset}d`}
                       badge={`Min due ${formatINR(c.minimum_due)}`}
                       amount={formatINR(c.outstanding)}
                       onEdit={() => setEditingId(c.id)}
-                      onDelete={async () => { await api.deleteCard(c.id); onRefetch(); }}
+                      onDelete={async () => { await api.deleteFinancialAccount(c.id); onRefetch(); }}
                     >
                       <div className="h-1 rounded-full bg-zinc-700 overflow-hidden">
                         <div className="h-full bg-red-500/60 rounded-full" style={{ width: c.outstanding > 0 ? `${Math.min((c.minimum_due / c.outstanding) * 100, 100)}%` : "0%" }} />
                       </div>
                       <button
-                        onClick={() => setTxnCardId(c.id)}
+                        onClick={() => { setTxnCardId(c.id); setTxnDefaultAddBill(false); }}
+                        className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-violet-400 transition-colors mt-2"
+                      >
+                        <List size={11} /> View Activity
+                      </button>
+                      <button
+                        onClick={() => { setTxnCardId(c.id); setTxnDefaultAddBill(true); }}
                         className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-violet-400 transition-colors mt-1"
                       >
-                        <List size={11} /> View Transactions
+                        <Plus size={11} /> Manual Entry
                       </button>
                     </ItemCard>
                   ))}
@@ -832,14 +959,14 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
                   {tab === "subscriptions" && subscriptions.map(s => (
                     <ItemCard key={s.id} title={s.name} subtitle={`${s.billing_cycle} · due day ${s.due_day}`} badge={s.category}
                       amount={formatINR(s.amount)}
-                      onEdit={() => setEditingId(s.id)} onDelete={async () => { await api.deleteSubscription(s.id); onRefetch(); }} />
+                      onEdit={() => setEditingId(s.id)} onDelete={async () => { await api.deleteObligation(s.id); onRefetch(); }} />
                   ))}
 
                   {tab === "emis" && emis.map(e => (
                     <ItemCard key={e.id} title={e.name} subtitle={`${e.lender} · due day ${e.due_day}`}
                       badge={`${e.paid_months} / ${e.total_months} months`}
                       amount={formatINR(e.amount)}
-                      onEdit={() => setEditingId(e.id)} onDelete={async () => { await api.deleteEmi(e.id); onRefetch(); }}
+                      onEdit={() => setEditingId(e.id)} onDelete={async () => { await api.deleteObligation(e.id); onRefetch(); }}
                     >
                       <div className="h-1 rounded-full bg-zinc-700 overflow-hidden">
                         <div className="h-full bg-violet-500/70 rounded-full" style={{ width: `${Math.min((e.paid_months / e.total_months) * 100, 100)}%` }} />

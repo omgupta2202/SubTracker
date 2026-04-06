@@ -63,10 +63,29 @@ def callback():
 @jwt_required()
 def sync():
     try:
-        result = service.sync_emails(get_jwt_identity())
+        from modules.gmail.pipeline import run_sync
+        result = run_sync(get_jwt_identity())
         return ok(result)
     except GmailError as e:
         return err(str(e), e.status)
+
+
+@bp.get("/sync-jobs")
+@jwt_required()
+def sync_jobs():
+    from modules.gmail.pipeline import list_sync_jobs
+    limit = int(request.args.get("limit", 10))
+    return ok(list_sync_jobs(get_jwt_identity(), limit=limit))
+
+
+@bp.get("/pipeline/<raw_email_id>")
+@jwt_required()
+def pipeline_trace(raw_email_id):
+    from modules.gmail.pipeline import get_pipeline_trace
+    trace = get_pipeline_trace(raw_email_id, get_jwt_identity())
+    if not trace:
+        return err("Email not found", 404)
+    return ok(trace)
 
 
 @bp.post("/connect-mobile")

@@ -185,9 +185,9 @@ export function ResizableGrid({ slots, cols = 3, rowHeights = [], className, onW
                   data-card-cell
                   data-row={ri}
                   style={{ width: `${widths[ri][ci]}%`, minWidth: MIN_W, flexShrink: 0, height: "100%" }}
-                  className={cn("overflow-hidden", cellCorner(ri, ci, totalRows, row.length))}
+                  className={cn("overflow-hidden min-h-0", cellCorner(ri, ci, totalRows, row.length))}
                 >
-                  <div className="h-full [&>div]:rounded-none [&>div]:border-0 [&>div]:h-full">
+                  <div className="h-full overflow-y-auto overflow-x-hidden min-h-0 [&>div]:rounded-none [&>div]:border-0 [&>div]:h-full">
                     {slot.node}
                   </div>
                 </div>

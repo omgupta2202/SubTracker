@@ -99,10 +99,13 @@ def get_filtered_cc_total(user_id: str,
                            date_from: Optional[str] = None,
                            date_to: Optional[str] = None,
                            include_billed: bool = True,
-                           include_unbilled: bool = True) -> float:
+                           include_unbilled: bool = True,
+                           billed_statement_status: str = "all") -> float:
     """
     Returns the sum of card transactions matching the given filters.
     Used by the dashboard summary endpoint.
+    billed_statement_status is accepted for API compatibility with v2,
+    but legacy schema does not track paid/unpaid statement status.
     """
     if not include_billed and not include_unbilled:
         return 0.0

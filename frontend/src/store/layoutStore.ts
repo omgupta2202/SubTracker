@@ -19,7 +19,7 @@ export function loadLayout(): CardConfig[] {
     const ids = new Set(parsed.map((c) => c.id));
     // backfill colSpan for old saved layouts that predate this field
     const merged = [
-      ...parsed.map(c => ({ colSpan: 1 as const, ...c })),
+      ...parsed.map(c => ({ ...c, colSpan: c.colSpan ?? 1 })),
       ...DEFAULT_LAYOUT.filter((d) => !ids.has(d.id)),
     ];
     return merged;

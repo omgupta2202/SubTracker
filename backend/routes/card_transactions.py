@@ -75,4 +75,5 @@ def period_summary():
         date_to=request.args.get("date_to"),
         include_billed=request.args.get("include_billed",   "true") == "true",
         include_unbilled=request.args.get("include_unbilled", "true") == "true",
+        billed_statement_status=request.args.get("billed_statement_status", "all"),
     ))

@@ -13,10 +13,7 @@ export function usePeriodSummary(filters: DashboardFilters, active: boolean) {
     setLoading(true);
     try {
       const res = await api.getPeriodSummary({
-        dateFrom:        filters.dateFrom   || undefined,
-        dateTo:          filters.dateTo     || undefined,
-        includeBilled:   filters.includeBilled,
-        includeUnbilled: filters.includeUnbilled,
+        dateTo: filters.asOfDate || undefined,
       });
       setSummary(res);
     } catch (e) {
