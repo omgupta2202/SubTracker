@@ -5,7 +5,11 @@
       "Bash(npm install *)",
       "Bash(npx tsc *)",
       "Bash(npm run *)",
-      "Bash(python3 -c \"import py_compile; py_compile.compile\\('app.py', doraise=True\\); print\\('ok'\\)\")"
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\('app.py', doraise=True\\); print\\('ok'\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git check-ignore *)"
     ]
   }
 }
