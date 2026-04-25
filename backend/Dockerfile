@@ -15,7 +15,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install runtime deps once for layer caching.
+# Install runtime deps once for layer caching
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir gunicorn
 
