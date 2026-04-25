@@ -146,10 +146,9 @@ export function Dashboard() {
       <div ref={headerRef} className="relative flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-zinc-100 tracking-tight">SubTracker</h1>
-          <p className="text-sm text-zinc-500 mt-0.5">Financial dashboard · March / April</p>
+          <p className="text-sm text-zinc-500 mt-0.5">Financial dashboard · {new Date().toLocaleDateString("en-IN", { month: "long", year: "numeric" })}</p>
         </div>
         <div className="flex items-center gap-3">
-          <History size={18} className="text-zinc-500 cursor-pointer hover:text-zinc-300 transition-colors" onClick={() => setHistoryOpen(true)} />
           {user && (
             <div 
               className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-zinc-800/50 cursor-pointer transition-colors group"

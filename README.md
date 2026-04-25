@@ -177,6 +177,25 @@ cd frontend
 npm run build
 ```
 
+### Netlify deployment
+
+The frontend can be deployed to Netlify as a static site. The backend still needs a separate host.
+
+Set these environment variables in Netlify:
+
+```env
+VITE_GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
+VITE_API_BASE=https://your-backend.example.com/api
+```
+
+Set these on the backend host:
+
+```env
+FRONTEND_URL=https://your-site.netlify.app
+CORS_ORIGINS=https://your-site.netlify.app
+BACKEND_URL=https://your-backend.example.com
+```
+
 ### Mobile APK (EAS)
 
 ```bash

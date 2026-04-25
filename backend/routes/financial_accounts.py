@@ -147,6 +147,27 @@ def update_account(account_id):
             list(fields.values()) + [account_id]
         )
 
+    if "balance" in body and acc["kind"] != "credit_card":
+        try:
+            target_balance = Decimal(str(body["balance"]))
+        except Exception:
+            return err("balance must be a valid number")
+
+        current_balance = ledger.get_balance(account_id)
+        delta = target_balance - current_balance
+        if delta != 0:
+            ledger.post_entry(
+                user_id=g.user_id,
+                account_id=account_id,
+                direction="credit" if delta > 0 else "debit",
+                amount=abs(delta),
+                description="Balance adjustment",
+                effective_date=__import__("datetime").date.today(),
+                category="balance_adjustment",
+                source="manual",
+                idempotency_key=None,
+            )
+
     # Update extension-specific fields
     kind = acc["kind"]
     if kind == "bank":

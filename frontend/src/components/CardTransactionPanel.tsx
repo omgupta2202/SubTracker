@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { FileText, CalendarClock, ArrowLeft, Plus, X, Loader2 } from "lucide-react";
+import { FileText, CalendarClock, ArrowLeft, Plus, X, Loader2, SlidersHorizontal } from "lucide-react";
 import type { CreditCard } from "@/types";
 import * as api from "@/services/api";
 import { formatINR } from "@/lib/utils";
@@ -30,6 +30,7 @@ export function CardTransactionPanel({ card, onBack, defaultAddingBill = false }
   const [editingCycleId, setEditingCycleId] = useState<string | null>(null);
   const [addingEntry, setAddingEntry] = useState(false);
   const [addingStatement, setAddingStatement] = useState(defaultAddingBill);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [entryAmount, setEntryAmount] = useState("");
   const [entryDescription, setEntryDescription] = useState("");
@@ -203,6 +204,18 @@ export function CardTransactionPanel({ card, onBack, defaultAddingBill = false }
     }
   }
 
+  function openQuickAddEntry() {
+    setTab("transactions");
+    setAddingEntry(true);
+    setAddingStatement(false);
+  }
+
+  function openQuickAddStatement() {
+    setTab("cycles");
+    setAddingStatement(true);
+    setAddingEntry(false);
+  }
+
   return (
     <div className="flex flex-col gap-4">
       {onBack && (
@@ -229,21 +242,39 @@ export function CardTransactionPanel({ card, onBack, defaultAddingBill = false }
       <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-4">
         <div className="flex items-center justify-between">
           <p className="text-xs uppercase tracking-wide text-zinc-500">Current Outstanding</p>
-          <div className="flex items-center gap-2">
-            <p className="font-mono text-sm text-zinc-500">{cycles.length > 0 ? "cycle-derived" : "ledger"}</p>
-            <button
-              onClick={() => { setTab("cycles"); setAddingStatement(v => !v); }}
-              className="inline-flex items-center gap-1.5 text-xs bg-zinc-700/40 border border-zinc-600/40 text-zinc-300 hover:bg-zinc-700/60 transition-colors px-2.5 py-1 rounded-lg"
-            >
-              {addingStatement ? <X size={12} /> : <Plus size={12} />}
-              {addingStatement ? "Cancel" : "Add Manual Statement"}
-            </button>
-          </div>
+          <p className="font-mono text-sm text-zinc-500">{cycles.length > 0 ? "cycle-derived" : "ledger"}</p>
         </div>
         <p className="font-mono text-2xl font-bold text-red-400 mt-1">{formatINR(displayedOutstanding)}</p>
         <p className="text-xs text-zinc-500 mt-1">
           {card.name}{card.last4 ? ` ···· ${card.last4}` : ""}{card.bank ? ` · ${card.bank}` : ""}
         </p>
+      </div>
+
+      <div className="rounded-xl border border-zinc-700/50 bg-zinc-900/40 p-3 flex flex-wrap items-center gap-2">
+        <button
+          onClick={openQuickAddEntry}
+          className="inline-flex items-center gap-1.5 text-xs bg-violet-600/20 border border-violet-500/40 text-violet-300 hover:bg-violet-600/30 transition-colors px-3 py-1.5 rounded-lg"
+        >
+          <Plus size={12} /> Add Spend
+        </button>
+        <button
+          onClick={openQuickAddStatement}
+          className="inline-flex items-center gap-1.5 text-xs bg-zinc-700/40 border border-zinc-600/40 text-zinc-300 hover:bg-zinc-700/60 transition-colors px-3 py-1.5 rounded-lg"
+        >
+          <CalendarClock size={12} /> Add Statement
+        </button>
+        <button
+          onClick={() => setTab("transactions")}
+          className="inline-flex items-center gap-1.5 text-xs bg-zinc-700/40 border border-zinc-600/40 text-zinc-300 hover:bg-zinc-700/60 transition-colors px-3 py-1.5 rounded-lg"
+        >
+          <FileText size={12} /> View Transactions
+        </button>
+        <button
+          onClick={() => setShowAdvanced(v => !v)}
+          className="ml-auto inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-1"
+        >
+          <SlidersHorizontal size={12} /> {showAdvanced ? "Hide Advanced" : "Show Advanced"}
+        </button>
       </div>
 
       <div className="rounded-xl border border-zinc-700/50 bg-zinc-900/40 p-3 flex flex-wrap items-center justify-between gap-2">
@@ -252,7 +283,7 @@ export function CardTransactionPanel({ card, onBack, defaultAddingBill = false }
             onClick={() => { setTab("overview"); setAddingEntry(false); setAddingStatement(false); }}
             className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${tab === "overview" ? "bg-violet-600 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
           >
-            Overview
+            Summary
           </button>
           <button
             onClick={() => { setTab("cycles"); setAddingEntry(false); }}
@@ -264,7 +295,7 @@ export function CardTransactionPanel({ card, onBack, defaultAddingBill = false }
             onClick={() => { setTab("transactions"); setAddingStatement(false); }}
             className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${tab === "transactions" ? "bg-violet-600 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
           >
-            Transactions
+            Spends
           </button>
         </div>
         {tab === "transactions" && (
@@ -273,7 +304,7 @@ export function CardTransactionPanel({ card, onBack, defaultAddingBill = false }
             className="inline-flex items-center gap-1.5 text-xs bg-violet-600/20 border border-violet-500/40 text-violet-300 hover:bg-violet-600/30 transition-colors px-2.5 py-1 rounded-lg"
           >
             {addingEntry ? <X size={12} /> : <Plus size={12} />}
-            {addingEntry ? "Cancel Entry" : "Add Manual Entry"}
+            {addingEntry ? "Cancel" : "Add Spend"}
           </button>
         )}
       </div>
@@ -514,26 +545,28 @@ export function CardTransactionPanel({ card, onBack, defaultAddingBill = false }
                   </button>
                 </div>
               ) : (
-                <div className="mt-3 flex items-center gap-3">
-                  <button
-                    onClick={() => {
-                      setEditingCycleId(c.id);
-                      setEditStatementDate((c.statement_date ?? "").slice(0, 10));
-                      setEditDueDate((c.due_date ?? "").slice(0, 10));
-                      setEditTotalBilled(String(c.total_billed ?? ""));
-                      setEditMinDue(String(c.minimum_due ?? ""));
-                    }}
-                    className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
-                  >
-                    Edit statement
-                  </button>
-                  <button
-                    onClick={() => void handleDeleteCycle(c.id)}
-                    className="text-xs text-red-400 hover:text-red-300 transition-colors"
-                  >
-                    Delete cycle
-                  </button>
-                </div>
+                showAdvanced ? (
+                  <div className="mt-3 flex items-center gap-3">
+                    <button
+                      onClick={() => {
+                        setEditingCycleId(c.id);
+                        setEditStatementDate((c.statement_date ?? "").slice(0, 10));
+                        setEditDueDate((c.due_date ?? "").slice(0, 10));
+                        setEditTotalBilled(String(c.total_billed ?? ""));
+                        setEditMinDue(String(c.minimum_due ?? ""));
+                      }}
+                      className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
+                    >
+                      Edit statement
+                    </button>
+                    <button
+                      onClick={() => void handleDeleteCycle(c.id)}
+                      className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                    >
+                      Delete cycle
+                    </button>
+                  </div>
+                ) : null
               )}
             </div>
           ))}
@@ -673,41 +706,43 @@ export function CardTransactionPanel({ card, onBack, defaultAddingBill = false }
                     </button>
                   </div>
                 ) : (
-                  <div className="mt-2 flex items-center gap-3">
-                    {Number(c.balance_due) > 0 ? (
+                  showAdvanced ? (
+                    <div className="mt-2 flex items-center gap-3">
+                      {Number(c.balance_due) > 0 ? (
+                        <button
+                          onClick={() => void markCyclePaid(c.id, Number(c.total_billed))}
+                          className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+                        >
+                          Mark Paid
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => void markCycleUnpaid(c.id)}
+                          className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                        >
+                          Mark Unpaid
+                        </button>
+                      )}
                       <button
-                        onClick={() => void markCyclePaid(c.id, Number(c.total_billed))}
-                        className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+                        onClick={() => {
+                          setEditingCycleId(c.id);
+                          setEditStatementDate((c.statement_date ?? "").slice(0, 10));
+                          setEditDueDate((c.due_date ?? "").slice(0, 10));
+                          setEditTotalBilled(String(c.total_billed ?? ""));
+                          setEditMinDue(String(c.minimum_due ?? ""));
+                        }}
+                        className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
                       >
-                        Mark Paid
+                        Edit statement
                       </button>
-                    ) : (
                       <button
-                        onClick={() => void markCycleUnpaid(c.id)}
-                        className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                        onClick={() => void handleDeleteCycle(c.id)}
+                        className="text-xs text-red-400 hover:text-red-300 transition-colors"
                       >
-                        Mark Unpaid
+                        Delete cycle
                       </button>
-                    )}
-                    <button
-                      onClick={() => {
-                        setEditingCycleId(c.id);
-                        setEditStatementDate((c.statement_date ?? "").slice(0, 10));
-                        setEditDueDate((c.due_date ?? "").slice(0, 10));
-                        setEditTotalBilled(String(c.total_billed ?? ""));
-                        setEditMinDue(String(c.minimum_due ?? ""));
-                      }}
-                      className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
-                    >
-                      Edit statement
-                    </button>
-                    <button
-                      onClick={() => void handleDeleteCycle(c.id)}
-                      className="text-xs text-red-400 hover:text-red-300 transition-colors"
-                    >
-                      Delete cycle
-                    </button>
-                  </div>
+                    </div>
+                  ) : null
                 )}
               </div>
             ))}

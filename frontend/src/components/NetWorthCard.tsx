@@ -37,12 +37,20 @@ const bankColor = (b: string) => BANK_COLOR[b] ?? "bg-zinc-500";
 
 function AccountRow({ account, onRefetch }: { account: LiquidAccount; onRefetch: () => void }) {
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [name, setName] = useState(account.name);
+  const [bank, setBank] = useState(account.bank ?? "");
+  const [balance, setBalance] = useState(String(account.balance));
 
   async function save() {
-    await api.updateFinancialAccount(account.id, { name });
-    setEditing(false);
-    onRefetch();
+    setSaving(true);
+    try {
+      await api.updateFinancialAccount(account.id, { name, institution: bank, balance: Number(balance) });
+      setEditing(false);
+      onRefetch();
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -55,8 +63,14 @@ function AccountRow({ account, onRefetch }: { account: LiquidAccount; onRefetch:
             <IField label="Account Name">
               <input className={iCls} value={name} onChange={e => setName(e.target.value)} />
             </IField>
+            <IField label="Bank">
+              <input className={iCls} value={bank} onChange={e => setBank(e.target.value)} />
+            </IField>
           </IGrid>
-          <ISaveCancel onSave={save} onCancel={() => setEditing(false)} />
+          <IField label="Balance (₹)">
+            <input className={iCls} type="number" value={balance} onChange={e => setBalance(e.target.value)} />
+          </IField>
+          <ISaveCancel saving={saving} onSave={save} onCancel={() => setEditing(false)} />
         </>
       }
     >
@@ -71,13 +85,48 @@ function AccountRow({ account, onRefetch }: { account: LiquidAccount; onRefetch:
 
 function CardRow({ card, onRefetch }: { card: CreditCardSnapshot; onRefetch: () => void }) {
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [name, setName] = useState(card.name);
-  const dueOffset = card.due_date_offset ?? 999;
+  const [bank, setBank] = useState(card.bank ?? "");
+  const [last4, setLast4] = useState(card.last4 ?? "");
+  const [outstanding, setOutstanding] = useState(String(card.outstanding));
+  const [minimumDue, setMinimumDue] = useState(String(card.minimum_due));
+  const [dueDay, setDueDay] = useState(card.due_day ? String(card.due_day) : "");
+  const [dueOffsetInput, setDueOffsetInput] = useState(card.due_date_offset ? String(card.due_date_offset) : "");
+  const dueOffsetDays = card.due_date_offset ?? 999;
 
   async function save() {
-    await api.updateFinancialAccount(card.id, { name });
-    setEditing(false);
-    onRefetch();
+    setSaving(true);
+    try {
+      await api.updateFinancialAccount(card.id, {
+        name,
+        institution: bank,
+        last4,
+        billing_cycle_day: dueDay ? Number(dueDay) : undefined,
+        due_offset_days: dueOffsetInput ? Number(dueOffsetInput) : undefined,
+      });
+
+      const cycleAmount = Number(outstanding || 0);
+      const minDueAmount = Number(minimumDue || 0);
+      const overview = await api.getBillingCycleOverview(card.id);
+      if (overview.current_cycle) {
+        await api.updateBillingCycle(overview.current_cycle.id, {
+          total_billed: cycleAmount,
+          minimum_due: minDueAmount,
+        });
+      } else if (cycleAmount !== 0 || minDueAmount !== 0) {
+        await api.createBillingCycleForCard(card.id, {
+          statement_period: "current",
+          total_billed: cycleAmount,
+          minimum_due: minDueAmount,
+        });
+      }
+
+      setEditing(false);
+      onRefetch();
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -86,10 +135,34 @@ function CardRow({ card, onRefetch }: { card: CreditCardSnapshot; onRefetch: () 
       onStartEdit={() => setEditing(true)}
       form={
         <>
-          <IField label="Card Name">
-            <input className={iCls} value={name} onChange={e => setName(e.target.value)} />
+          <IGrid>
+            <IField label="Card Name">
+              <input className={iCls} value={name} onChange={e => setName(e.target.value)} />
+            </IField>
+            <IField label="Bank">
+              <input className={iCls} value={bank} onChange={e => setBank(e.target.value)} />
+            </IField>
+          </IGrid>
+          <IGrid>
+            <IField label="Last 4">
+              <input className={iCls} value={last4} onChange={e => setLast4(e.target.value.replace(/\D/g, "").slice(0, 4))} maxLength={4} inputMode="numeric" />
+            </IField>
+            <IField label="Statement Day">
+              <input className={iCls} type="number" min={1} max={31} value={dueDay} onChange={e => setDueDay(e.target.value)} />
+            </IField>
+          </IGrid>
+          <IGrid>
+            <IField label="Outstanding (₹)">
+              <input className={iCls} type="number" value={outstanding} onChange={e => setOutstanding(e.target.value)} />
+            </IField>
+            <IField label="Minimum Due (₹)">
+              <input className={iCls} type="number" value={minimumDue} onChange={e => setMinimumDue(e.target.value)} />
+            </IField>
+          </IGrid>
+          <IField label="Due Offset (days)">
+            <input className={iCls} type="number" min={0} max={60} value={dueOffsetInput} onChange={e => setDueOffsetInput(e.target.value)} />
           </IField>
-          <ISaveCancel onSave={save} onCancel={() => setEditing(false)} />
+          <ISaveCancel saving={saving} onSave={save} onCancel={() => setEditing(false)} />
         </>
       }
     >
@@ -103,7 +176,7 @@ function CardRow({ card, onRefetch }: { card: CreditCardSnapshot; onRefetch: () 
             <p className="font-mono text-sm font-semibold text-red-400">{formatINR(card.outstanding)}</p>
             <p className="text-xs text-zinc-500">
               {card.due_day ? `bill day ${card.due_day}` : ""}
-              {dueOffset === 0 ? " · due today" : dueOffset <= 7 ? ` · ${dueOffset}d left` : ""}
+              {dueOffsetDays === 0 ? " · due today" : dueOffsetDays <= 7 ? ` · ${dueOffsetDays}d left` : ""}
             </p>
           </div>
         </div>

@@ -18,28 +18,58 @@ interface Props {
 
 function SubRow({ sub, onRefetch }: { sub: Subscription; onRefetch: () => void }) {
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState(sub.name);
   const [amount, setAmount] = useState(String(sub.amount));
+  const [cycle, setCycle] = useState<Subscription["billing_cycle"]>(sub.billing_cycle);
   const [dueDay, setDueDay] = useState(String(sub.due_day));
+  const [category, setCategory] = useState(sub.category);
 
   async function save() {
-    await api.updateObligation(sub.id, { amount: Number(amount), due_day: Number(dueDay) });
-    setEditing(false); onRefetch();
+    setSaving(true);
+    try {
+      await api.updateObligation(sub.id, {
+        name,
+        amount: Number(amount),
+        due_day: Number(dueDay),
+        frequency: cycle,
+        category,
+      });
+      setEditing(false);
+      onRefetch();
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <EditableRow editing={editing} onStartEdit={() => setEditing(true)}
       form={
         <>
-          <p className="text-xs font-semibold text-zinc-300">{sub.name}</p>
+          <IField label="Name">
+            <input className={iCls} value={name} onChange={e => setName(e.target.value)} />
+          </IField>
           <IGrid>
             <IField label="Amount (₹)">
               <input className={iCls} type="number" value={amount} onChange={e => setAmount(e.target.value)} />
             </IField>
+            <IField label="Billing Cycle">
+              <select className={iCls} value={cycle} onChange={e => setCycle(e.target.value as Subscription["billing_cycle"])}>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+                <option value="weekly">Weekly</option>
+              </select>
+            </IField>
+          </IGrid>
+          <IGrid>
             <IField label="Due Day">
               <input className={iCls} type="number" min={1} max={31} value={dueDay} onChange={e => setDueDay(e.target.value)} />
             </IField>
+            <IField label="Category">
+              <input className={iCls} value={category} onChange={e => setCategory(e.target.value)} />
+            </IField>
           </IGrid>
-          <ISaveCancel onSave={save} onCancel={() => setEditing(false)} />
+          <ISaveCancel saving={saving} onSave={save} onCancel={() => setEditing(false)} />
         </>
       }
     >
@@ -56,19 +86,42 @@ function SubRow({ sub, onRefetch }: { sub: Subscription; onRefetch: () => void }
 
 function EmiRow({ emi, onRefetch }: { emi: EMI; onRefetch: () => void }) {
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState(emi.name);
+  const [lender, setLender] = useState(emi.lender);
   const [amount, setAmount] = useState(String(emi.amount));
   const [paid, setPaid] = useState(String(emi.paid_months));
+  const [total, setTotal] = useState(String(emi.total_months));
 
   async function save() {
-    await api.updateObligation(emi.id, { amount: Number(amount), completed_installments: Number(paid) });
-    setEditing(false); onRefetch();
+    setSaving(true);
+    try {
+      await api.updateObligation(emi.id, {
+        name,
+        lender,
+        amount: Number(amount),
+        completed_installments: Number(paid),
+        total_installments: Number(total),
+      });
+      setEditing(false);
+      onRefetch();
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <EditableRow editing={editing} onStartEdit={() => setEditing(true)}
       form={
         <>
-          <p className="text-xs font-semibold text-zinc-300">{emi.name} · {emi.lender}</p>
+          <IGrid>
+            <IField label="Name">
+              <input className={iCls} value={name} onChange={e => setName(e.target.value)} />
+            </IField>
+            <IField label="Lender">
+              <input className={iCls} value={lender} onChange={e => setLender(e.target.value)} />
+            </IField>
+          </IGrid>
           <IGrid>
             <IField label="Monthly EMI (₹)">
               <input className={iCls} type="number" value={amount} onChange={e => setAmount(e.target.value)} />
@@ -77,7 +130,10 @@ function EmiRow({ emi, onRefetch }: { emi: EMI; onRefetch: () => void }) {
               <input className={iCls} type="number" value={paid} onChange={e => setPaid(e.target.value)} />
             </IField>
           </IGrid>
-          <ISaveCancel onSave={save} onCancel={() => setEditing(false)} />
+          <IField label="Total Months">
+            <input className={iCls} type="number" value={total} onChange={e => setTotal(e.target.value)} />
+          </IField>
+          <ISaveCancel saving={saving} onSave={save} onCancel={() => setEditing(false)} />
         </>
       }
     >

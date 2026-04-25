@@ -6,6 +6,7 @@ GET /api/dashboard/monthly-burn   burn history over N months
 GET /api/dashboard/cash-flow      inflows vs outflows over a period
 GET /api/dashboard/utilization    credit utilization per card
 """
+import calendar
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from flask import Blueprint, request, g
@@ -299,44 +300,74 @@ def monthly_burn():
     """Burn and income trend over the last N months."""
     months = min(int(request.args.get("months", 6)), 24)
     today = date.today()
-    result = []
 
+    # Build ordered list of (year, month) from oldest to newest
+    month_list = []
     for i in range(months - 1, -1, -1):
-        # Walk backwards from current month
-        y = today.year
-        m = today.month - i
+        y, m = today.year, today.month - i
         while m <= 0:
             m += 12
             y -= 1
+        month_list.append((y, m))
 
-        burn = ledger.get_monthly_burn(g.user_id, y, m)
+    # Start/end dates for the range
+    start_date = date(month_list[0][0], month_list[0][1], 1)
+    end_y, end_m = month_list[-1]
+    end_date = date(end_y, end_m, calendar.monthrange(end_y, end_m)[1])
 
-        # Income = credits to bank/wallet accounts in that month (excl. transfers)
-        income_row = fetchone(
-            """
-            SELECT COALESCE(SUM(le.amount), 0) AS income
-            FROM ledger_entries le
-            JOIN financial_accounts fa ON le.account_id = fa.id
-            WHERE le.user_id=%s
-              AND le.direction='credit'
-              AND le.status='posted'
-              AND le.deleted_at IS NULL
-              AND fa.kind IN ('bank','wallet','cash')
-              AND le.category NOT IN ('transfer','opening_balance')
-              AND EXTRACT(YEAR  FROM le.effective_date) = %s
-              AND EXTRACT(MONTH FROM le.effective_date) = %s
-            """,
-            (g.user_id, y, m)
-        )
-        income = float(income_row["income"])
+    # Single query for all burns across the range
+    burn_rows = fetchall(
+        """
+        SELECT EXTRACT(YEAR  FROM le.effective_date)::int AS year,
+               EXTRACT(MONTH FROM le.effective_date)::int AS month,
+               COALESCE(SUM(le.amount), 0) AS burn
+        FROM ledger_entries le
+        JOIN financial_accounts fa ON le.account_id = fa.id
+        WHERE le.user_id=%s
+          AND le.direction='debit'
+          AND le.status='posted'
+          AND le.deleted_at IS NULL
+          AND fa.kind IN ('bank','wallet','cash')
+          AND le.category NOT IN ('cc_payment','opening_balance','transfer')
+          AND le.effective_date BETWEEN %s AND %s
+        GROUP BY 1, 2
+        """,
+        (g.user_id, start_date, end_date),
+    )
+    burn_map = {(r["year"], r["month"]): float(r["burn"]) for r in burn_rows}
 
+    # Single query for all incomes across the range
+    income_rows = fetchall(
+        """
+        SELECT EXTRACT(YEAR  FROM le.effective_date)::int AS year,
+               EXTRACT(MONTH FROM le.effective_date)::int AS month,
+               COALESCE(SUM(le.amount), 0) AS income
+        FROM ledger_entries le
+        JOIN financial_accounts fa ON le.account_id = fa.id
+        WHERE le.user_id=%s
+          AND le.direction='credit'
+          AND le.status='posted'
+          AND le.deleted_at IS NULL
+          AND fa.kind IN ('bank','wallet','cash')
+          AND le.category NOT IN ('transfer','opening_balance')
+          AND le.effective_date BETWEEN %s AND %s
+        GROUP BY 1, 2
+        """,
+        (g.user_id, start_date, end_date),
+    )
+    income_map = {(r["year"], r["month"]): float(r["income"]) for r in income_rows}
+
+    result = []
+    for y, m in month_list:
+        burn   = burn_map.get((y, m), 0.0)
+        income = income_map.get((y, m), 0.0)
         result.append({
             "year": y,
             "month": m,
             "month_label": date(y, m, 1).strftime("%b %Y"),
-            "burn": float(burn),
+            "burn": burn,
             "income": income,
-            "net": income - float(burn),
+            "net": income - burn,
         })
 
     return ok(result)
@@ -410,17 +441,23 @@ def utilization():
     cards = fetchall(
         """
         SELECT fa.id, fa.name, fa.institution,
-               ext.last4, ext.credit_limit
+               ext.last4, ext.credit_limit,
+               COALESCE(SUM(
+                 CASE WHEN bc.is_closed=FALSE THEN bc.balance_due ELSE 0 END
+               ), 0) AS outstanding
         FROM financial_accounts fa
         JOIN account_cc_ext ext ON fa.id = ext.account_id
+        LEFT JOIN billing_cycles bc
+          ON bc.account_id = fa.id AND bc.deleted_at IS NULL
         WHERE fa.user_id=%s AND fa.kind='credit_card'
           AND fa.is_active=TRUE AND fa.deleted_at IS NULL
+        GROUP BY fa.id, fa.name, fa.institution, ext.last4, ext.credit_limit
         """,
-        (g.user_id,)
+        (g.user_id,),
     )
     result = []
     for cc in cards:
-        outstanding = float(ledger.get_cc_outstanding(cc["id"]))
+        outstanding = float(cc["outstanding"])
         limit = float(cc["credit_limit"]) if cc.get("credit_limit") else None
         result.append({
             "id": cc["id"],

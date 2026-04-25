@@ -12,6 +12,9 @@ interface Props {
 
 function EmiRow({ emi, onRefetch }: { emi: EMI; onRefetch: () => void }) {
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState(emi.name);
+  const [lender, setLender] = useState(emi.lender);
   const [amount, setAmount] = useState(String(emi.amount));
   const [paid, setPaid] = useState(String(emi.paid_months));
   const [total, setTotal] = useState(String(emi.total_months));
@@ -21,13 +24,21 @@ function EmiRow({ emi, onRefetch }: { emi: EMI; onRefetch: () => void }) {
   const remaining = emi.total_months - emi.paid_months;
 
   async function save() {
-    await api.updateObligation(emi.id, {
-      amount: Number(amount),
-      completed_installments: Number(paid),
-      total_installments: Number(total),
-      due_day: Number(dueDay),
-    });
-    setEditing(false); onRefetch();
+    setSaving(true);
+    try {
+      await api.updateObligation(emi.id, {
+        name,
+        lender,
+        amount: Number(amount),
+        completed_installments: Number(paid),
+        total_installments: Number(total),
+        due_day: Number(dueDay),
+      });
+      setEditing(false);
+      onRefetch();
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -36,7 +47,14 @@ function EmiRow({ emi, onRefetch }: { emi: EMI; onRefetch: () => void }) {
       onStartEdit={() => setEditing(true)}
       form={
         <>
-          <p className="text-xs font-semibold text-zinc-200">{emi.name} · {emi.lender}</p>
+          <IGrid>
+            <IField label="EMI Name">
+              <input className={iCls} value={name} onChange={e => setName(e.target.value)} />
+            </IField>
+            <IField label="Lender">
+              <input className={iCls} value={lender} onChange={e => setLender(e.target.value)} />
+            </IField>
+          </IGrid>
           <IGrid>
             <IField label="Monthly EMI (₹)">
               <input className={iCls} type="number" value={amount} onChange={e => setAmount(e.target.value)} />
@@ -53,7 +71,7 @@ function EmiRow({ emi, onRefetch }: { emi: EMI; onRefetch: () => void }) {
               <input className={iCls} type="number" value={total} onChange={e => setTotal(e.target.value)} />
             </IField>
           </IGrid>
-          <ISaveCancel onSave={save} onCancel={() => setEditing(false)} />
+          <ISaveCancel saving={saving} onSave={save} onCancel={() => setEditing(false)} />
         </>
       }
     >

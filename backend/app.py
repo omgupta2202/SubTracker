@@ -32,6 +32,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask import g
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt_identity
+from urllib.parse import urlsplit
 
 # ── Legacy routes (kept for backward compat) ──────────────────────────────────
 from routes.subscriptions      import bp as subscriptions_bp
@@ -61,7 +62,18 @@ from modules.gmail import bp as gmail_bp
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    CORS(app, origins=["http://localhost:5173"])
+    allowed_origins = ["http://localhost:5173"]
+    cors_origins = os.environ.get("CORS_ORIGINS", "")
+    if cors_origins:
+        allowed_origins.extend([origin.strip() for origin in cors_origins.split(",") if origin.strip()])
+
+    frontend_url = os.environ.get("FRONTEND_URL")
+    if frontend_url:
+        parsed = urlsplit(frontend_url)
+        if parsed.scheme and parsed.netloc:
+            allowed_origins.append(f"{parsed.scheme}://{parsed.netloc}")
+
+    CORS(app, origins=sorted(set(allowed_origins)))
 
     app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "change-me-in-production")
     JWTManager(app)

@@ -1,6 +1,8 @@
 import type { GmailStatus, SyncResult } from "./types";
 
-const BASE = "/api";
+import { getApiBase } from "@/lib/apiBase";
+
+const BASE = getApiBase();
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("auth_token");

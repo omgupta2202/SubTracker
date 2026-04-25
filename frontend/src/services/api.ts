@@ -5,8 +5,9 @@ import type {
   DailyLogMeta, DailyLogComparison,
   DashboardSummary, MonthlyBurnItem, FinancialAccount, Obligation,
 } from "@/types";
+import { getApiBase } from "@/lib/apiBase";
 
-const BASE = "/api";
+const BASE = getApiBase();
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("auth_token");

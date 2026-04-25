@@ -4,7 +4,7 @@
  * replaces the row with a compact form.
  */
 import { useState } from "react";
-import { Pencil, Check, X } from "lucide-react";
+import { Pencil, Check, X, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── tiny field primitives (compact, fits inside cards) ─────────────────────
@@ -36,18 +36,28 @@ export function IGrid({ children, cols = 2 }: { children: React.ReactNode; cols?
 
 // ── save / cancel row ──────────────────────────────────────────────────────
 
-export function ISaveCancel({ onSave, onCancel }: { onSave: () => void; onCancel: () => void }) {
+export function ISaveCancel({
+  onSave,
+  onCancel,
+  saving = false,
+}: {
+  onSave: () => void;
+  onCancel: () => void;
+  saving?: boolean;
+}) {
   return (
     <div className="flex gap-2 pt-1">
       <button
         onClick={onSave}
-        className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+        disabled={saving}
+        className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-60 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
       >
-        <Check size={12} /> Save
+        {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} {saving ? "Saving..." : "Save"}
       </button>
       <button
         onClick={onCancel}
-        className="flex items-center gap-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 px-3 py-1.5 rounded-lg text-xs transition-colors"
+        disabled={saving}
+        className="flex items-center gap-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 disabled:cursor-not-allowed text-zinc-400 px-3 py-1.5 rounded-lg text-xs transition-colors"
       >
         <X size={12} /> Cancel
       </button>

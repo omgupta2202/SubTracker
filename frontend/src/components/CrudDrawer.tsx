@@ -186,6 +186,7 @@ function CardForm({ initial, onSave, onCancel }: { initial?: CreditCard; onSave:
   const [bank, setBank] = useState(initial?.bank ?? "");
   const [last4, setLast4] = useState(initial?.last4 ?? "");
   const [creditLimit, setCreditLimit] = useState(String(initial?.credit_limit ?? ""));
+  const [outstanding, setOutstanding] = useState(String(initial?.outstanding ?? ""));
   const [dueDay, setDueDay] = useState(String(initial?.due_day ?? "5"));
   const [dueOffset, setDueOffset] = useState(String(initial?.due_date_offset ?? "20"));
   return (
@@ -208,6 +209,9 @@ function CardForm({ initial, onSave, onCancel }: { initial?: CreditCard; onSave:
           <Field label="Credit Limit" hint="₹">
             <input className={inputCls} type="number" value={creditLimit} onChange={e => setCreditLimit(e.target.value)} />
           </Field>
+          <Field label="Current Cycle Amount" hint="₹">
+            <input className={inputCls} type="number" value={outstanding} onChange={e => setOutstanding(e.target.value)} />
+          </Field>
           <Field label="Statement Day" hint="1 – 31">
             <input className={inputCls} type="number" min={1} max={31} value={dueDay} onChange={e => setDueDay(e.target.value)} />
           </Field>
@@ -221,7 +225,7 @@ function CardForm({ initial, onSave, onCancel }: { initial?: CreditCard; onSave:
         bank,
         last4,
         credit_limit: creditLimit ? Number(creditLimit) : undefined,
-        outstanding: initial?.outstanding ?? 0,
+        outstanding: outstanding ? Number(outstanding) : 0,
         minimum_due: initial?.minimum_due ?? 0,
         due_day: Number(dueDay),
         due_date_offset: Number(dueOffset),
@@ -440,6 +444,7 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
   const [gmailSyncing, setGmailSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [gmailError, setGmailError] = useState<string | null>(null);
+  const [processingMessage, setProcessingMessage] = useState<string | null>(null);
 
   // Sync tab with initialTab when drawer opens or initialTab changes
   useEffect(() => {
@@ -470,144 +475,197 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
   const [adding, setAdding] = useState(false);
   const [txnCardId, setTxnCardId] = useState<string | null>(null);
   const [txnDefaultAddBill, setTxnDefaultAddBill] = useState(false);
+  const isProcessing = processingMessage !== null;
+
+  async function withProcessing<T>(message: string, run: () => Promise<T>): Promise<T> {
+    setProcessingMessage(message);
+    try {
+      return await run();
+    } finally {
+      setProcessingMessage(null);
+    }
+  }
+
   const reset = () => { setEditingId(null); setAdding(false); setTxnCardId(null); setTxnDefaultAddBill(false); };
   const switchTab = (t: Tab) => { setTab(t); reset(); };
 
   async function saveSub(id: string | null, d: Omit<Subscription, "id">) {
     try {
-      if (id) {
-        await api.updateObligation(id, {
-          name: d.name,
-          amount: d.amount,
-          frequency: d.billing_cycle === "monthly" || d.billing_cycle === "yearly" || d.billing_cycle === "weekly"
-            ? d.billing_cycle
-            : "monthly",
-          due_day: d.due_day,
-        });
-      } else {
-        await api.createObligation({
-          type: "subscription",
-          name: d.name,
-          amount: d.amount,
-          frequency: d.billing_cycle,
-          anchor_date: new Date().toISOString().slice(0, 10),
-          due_day: d.due_day,
-          category: d.category,
-        });
-      }
+      await withProcessing(id ? "Updating subscription..." : "Creating subscription...", async () => {
+        if (id) {
+          await api.updateObligation(id, {
+            name: d.name,
+            amount: d.amount,
+            frequency: d.billing_cycle === "monthly" || d.billing_cycle === "yearly" || d.billing_cycle === "weekly"
+              ? d.billing_cycle
+              : "monthly",
+            due_day: d.due_day,
+          });
+        } else {
+          await api.createObligation({
+            type: "subscription",
+            name: d.name,
+            amount: d.amount,
+            frequency: d.billing_cycle,
+            anchor_date: new Date().toISOString().slice(0, 10),
+            due_day: d.due_day,
+            category: d.category,
+          });
+        }
+      });
+      reset();
+      onRefetch();
     }
     catch (e) { console.error(e); }
-    reset(); onRefetch();
   }
   async function saveEmi(id: string | null, d: Omit<EMI, "id">) {
     try {
-      if (id) {
-        await api.updateObligation(id, {
-          name: d.name,
-          amount: d.amount,
-          total_installments: d.total_months,
-          completed_installments: d.paid_months,
-          due_day: d.due_day,
-          lender: d.lender,
-        });
-      } else {
-        await api.createObligation({
-          type: "emi",
-          name: d.name,
-          amount: d.amount,
-          frequency: "monthly",
-          anchor_date: new Date().toISOString().slice(0, 10),
-          due_day: d.due_day,
-          total_installments: d.total_months,
-          completed_installments: d.paid_months,
-          lender: d.lender,
-          category: "Loan",
-        });
-      }
+      await withProcessing(id ? "Updating EMI..." : "Creating EMI...", async () => {
+        if (id) {
+          await api.updateObligation(id, {
+            name: d.name,
+            amount: d.amount,
+            total_installments: d.total_months,
+            completed_installments: d.paid_months,
+            due_day: d.due_day,
+            lender: d.lender,
+          });
+        } else {
+          await api.createObligation({
+            type: "emi",
+            name: d.name,
+            amount: d.amount,
+            frequency: "monthly",
+            anchor_date: new Date().toISOString().slice(0, 10),
+            due_day: d.due_day,
+            total_installments: d.total_months,
+            completed_installments: d.paid_months,
+            lender: d.lender,
+            category: "Loan",
+          });
+        }
+      });
+      reset();
+      onRefetch();
     }
     catch (e) { console.error(e); }
-    reset(); onRefetch();
   }
   async function saveCard(id: string | null, d: Omit<CreditCard, "id">) {
     try {
-      if (id) {
-        await api.updateFinancialAccount(id, {
-          name: d.name,
-          institution: d.bank,
-          last4: d.last4,
-          billing_cycle_day: d.due_day,
-          due_offset_days: d.due_date_offset,
-          credit_limit: d.credit_limit,
-        });
-      } else {
-        await api.createFinancialAccount({
-          kind: "credit_card",
-          name: d.name,
-          institution: d.bank,
-          last4: d.last4,
-          billing_cycle_day: d.due_day,
-          due_offset_days: d.due_date_offset,
-        } as any);
-      }
+      await withProcessing(id ? "Updating credit card..." : "Creating credit card...", async () => {
+        if (id) {
+          await api.updateFinancialAccount(id, {
+            name: d.name,
+            institution: d.bank,
+            last4: d.last4,
+            billing_cycle_day: d.due_day,
+            due_offset_days: d.due_date_offset,
+            credit_limit: d.credit_limit,
+          });
+
+          const cycleAmount = Number(d.outstanding ?? 0);
+          const overview = await api.getBillingCycleOverview(id);
+          if (overview.current_cycle) {
+            await api.updateBillingCycle(overview.current_cycle.id, {
+              total_billed: cycleAmount,
+            });
+          } else if (cycleAmount !== 0 || Number(d.minimum_due ?? 0) !== 0) {
+            await api.createBillingCycleForCard(id, {
+              statement_period: "current",
+              total_billed: cycleAmount,
+              minimum_due: d.minimum_due,
+            });
+          }
+        } else {
+          await api.createFinancialAccount({
+            kind: "credit_card",
+            name: d.name,
+            institution: d.bank,
+            last4: d.last4,
+            billing_cycle_day: d.due_day,
+            due_offset_days: d.due_date_offset,
+          } as any);
+        }
+      });
+      reset();
+      onRefetch();
     }
     catch (e) { console.error(e); }
-    reset(); onRefetch();
   }
   async function saveAccount(id: string | null, d: Omit<BankAccount, "id">) {
     try {
-      if (id) {
-        await api.updateFinancialAccount(id, {
-          name: d.name,
-          institution: d.bank,
-        });
-      } else {
-        await api.createFinancialAccount({
-          kind: "bank",
-          name: d.name,
-          institution: d.bank,
-          opening_balance: d.balance,
-        } as any);
-      }
+      await withProcessing(id ? "Updating account..." : "Creating account...", async () => {
+        if (id) {
+          await api.updateFinancialAccount(id, {
+            name: d.name,
+            institution: d.bank,
+            balance: d.balance,
+          });
+        } else {
+          await api.createFinancialAccount({
+            kind: "bank",
+            name: d.name,
+            institution: d.bank,
+            opening_balance: d.balance,
+          } as any);
+        }
+      });
+      reset();
+      onRefetch();
     }
     catch (e) { console.error(e); }
-    reset(); onRefetch();
   }
   async function saveReceivable(id: string | null, d: Omit<Receivable, "id">) {
-    try { if (id) await api.updateReceivable(id, d); else await api.createReceivable(d); }
+    try {
+      await withProcessing(id ? "Updating receivable..." : "Creating receivable...", async () => {
+        if (id) await api.updateReceivable(id, d);
+        else await api.createReceivable(d);
+      });
+      reset();
+      onRefetch();
+    }
     catch (e) { console.error(e); }
-    reset(); onRefetch();
   }
   async function saveCapex(id: string | null, d: Omit<CapExItem, "id">) {
-    try { if (id) await api.updateCapex(id, d); else await api.createCapex(d); }
+    try {
+      await withProcessing(id ? "Updating CapEx item..." : "Creating CapEx item...", async () => {
+        if (id) await api.updateCapex(id, d);
+        else await api.createCapex(d);
+      });
+      reset();
+      onRefetch();
+    }
     catch (e) { console.error(e); }
-    reset(); onRefetch();
   }
   async function saveRent(d: Rent) {
     try {
-      if (rent.id) {
-        await api.updateObligation(rent.id, {
-          amount: d.amount,
-          due_day: d.due_day,
-          name: "House Rent",
-        });
-      } else {
-        await api.createObligation({
-          type: "rent",
-          name: "House Rent",
-          amount: d.amount,
-          frequency: "monthly",
-          anchor_date: new Date().toISOString().slice(0, 10),
-          due_day: d.due_day,
-          category: "Housing",
-        });
-      }
+      await withProcessing("Saving rent...", async () => {
+        if (rent.id) {
+          await api.updateObligation(rent.id, {
+            amount: d.amount,
+            due_day: d.due_day,
+            name: "House Rent",
+          });
+        } else {
+          await api.createObligation({
+            type: "rent",
+            name: "House Rent",
+            amount: d.amount,
+            frequency: "monthly",
+            anchor_date: new Date().toISOString().slice(0, 10),
+            due_day: d.due_day,
+            category: "Housing",
+          });
+        }
+      });
+      reset();
+      onRefetch();
     } catch (e) { console.error(e); }
-    reset(); onRefetch();
   }
 
   async function saveProfile(d: { name: string; email: string; password?: string }) {
     try {
-      const updated = await api.updateUser(d);
+      const updated = await withProcessing("Updating profile...", () => api.updateUser(d));
       onUserUpdate(updated);
       alert("Profile updated successfully");
     } catch (e: any) {
@@ -618,7 +676,7 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
   async function handleGmailConnect() {
     setGmailError(null);
     try {
-      const { oauth_url } = await getConnectUrl();
+      const { oauth_url } = await withProcessing("Starting Gmail connection...", () => getConnectUrl());
       window.location.href = oauth_url;
     } catch (e: any) {
       setGmailError(e.message || "Failed to start Gmail connection");
@@ -630,7 +688,7 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
     setSyncResult(null);
     setGmailError(null);
     try {
-      const result = await syncGmail();
+      const result = await withProcessing("Syncing Gmail...", () => syncGmail());
       setSyncResult(result);
       const status = await getGmailStatus();
       setGmailStatus(status);
@@ -645,7 +703,7 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
   async function handleGmailDisconnect() {
     if (!window.confirm("Disconnect Gmail? You can reconnect anytime.")) return;
     try {
-      await disconnectGmail();
+      await withProcessing("Disconnecting Gmail...", () => disconnectGmail());
       setGmailStatus(s => s ? { ...s, connected: false, connected_at: null } : null);
       setSyncResult(null);
     } catch (e: any) {
@@ -656,7 +714,7 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
   async function deleteAccount() {
     if (!window.confirm("Are you sure you want to delete your account? This cannot be undone.")) return;
     try {
-      await api.deleteUser();
+      await withProcessing("Deleting account...", () => api.deleteUser());
       onLogout();
     } catch (e: any) {
       alert(e.message || "Failed to delete account");
@@ -690,8 +748,9 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
               <button
                 key={n.id}
                 onClick={() => switchTab(n.id)}
+                disabled={isProcessing}
                 className={cn(
-                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors",
+                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
                   tab === n.id
                     ? "bg-violet-600/20 text-violet-300 border border-violet-500/30"
                     : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border border-transparent"
@@ -722,20 +781,28 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
               {!isRent && !isProfile && !adding && !editingId && (
                 <button
                   onClick={() => setAdding(true)}
+                  disabled={isProcessing}
                   className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
                 >
                   <Plus size={15} /> Add New
                 </button>
               )}
-              <button onClick={onClose} className="p-2 rounded-xl text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors">
+              <button onClick={onClose} disabled={isProcessing} className="p-2 rounded-xl text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                 <X size={18} />
               </button>
             </div>
           </div>
 
           {/* Scrollable content */}
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto relative">
             <div className="px-8 py-6 flex flex-col gap-5">
+
+              {isProcessing && (
+                <div className="rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-3 flex items-center gap-2 text-sm text-violet-200">
+                  <Loader2 size={14} className="animate-spin" />
+                  <span>{processingMessage}</span>
+                </div>
+              )}
 
               {/* ── Add / Edit form panel ── */}
               {(adding || editingId) && (
@@ -746,6 +813,7 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
                     </p>
                     <button
                       onClick={reset}
+                      disabled={isProcessing}
                       className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
                       aria-label="Close entry form"
                       title="Close"
@@ -903,7 +971,7 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
                     <ItemCard key={a.id} title={a.name} subtitle={a.bank} amount={formatINR(a.balance)}
                       onEdit={() => setEditingId(a.id)} onDelete={async () => { 
                         if (window.confirm(`Are you sure you want to delete account "${a.name}"?`)) {
-                          await api.deleteFinancialAccount(a.id); 
+                          await withProcessing("Deleting account...", () => api.deleteFinancialAccount(a.id));
                           onRefetch(); 
                         }
                       }} />
@@ -925,7 +993,7 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
                       badge={`Min due ${formatINR(c.minimum_due)}`}
                       amount={formatINR(c.outstanding)}
                       onEdit={() => setEditingId(c.id)}
-                      onDelete={async () => { await api.deleteFinancialAccount(c.id); onRefetch(); }}
+                      onDelete={async () => { await withProcessing("Deleting card...", () => api.deleteFinancialAccount(c.id)); onRefetch(); }}
                     >
                       <div className="h-1 rounded-full bg-zinc-700 overflow-hidden">
                         <div className="h-full bg-red-500/60 rounded-full" style={{ width: c.outstanding > 0 ? `${Math.min((c.minimum_due / c.outstanding) * 100, 100)}%` : "0%" }} />
@@ -934,13 +1002,7 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
                         onClick={() => { setTxnCardId(c.id); setTxnDefaultAddBill(false); }}
                         className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-violet-400 transition-colors mt-2"
                       >
-                        <List size={11} /> View Activity
-                      </button>
-                      <button
-                        onClick={() => { setTxnCardId(c.id); setTxnDefaultAddBill(true); }}
-                        className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-violet-400 transition-colors mt-1"
-                      >
-                        <Plus size={11} /> Manual Entry
+                        <List size={11} /> Open Card Hub
                       </button>
                     </ItemCard>
                   ))}
@@ -948,25 +1010,25 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
                   {tab === "receivables" && receivables.map(r => (
                     <ItemCard key={r.id} title={r.name} subtitle={`${r.source} · expected day ${r.expected_day}`}
                       amount={formatINR(r.amount)}
-                      onEdit={() => setEditingId(r.id)} onDelete={async () => { await api.deleteReceivable(r.id); onRefetch(); }} />
+                      onEdit={() => setEditingId(r.id)} onDelete={async () => { await withProcessing("Deleting receivable...", () => api.deleteReceivable(r.id)); onRefetch(); }} />
                   ))}
 
                   {tab === "capex" && capex.map(item => (
                     <ItemCard key={item.id} title={item.name} badge={item.category} amount={formatINR(item.amount)}
-                      onEdit={() => setEditingId(item.id)} onDelete={async () => { await api.deleteCapex(item.id); onRefetch(); }} />
+                      onEdit={() => setEditingId(item.id)} onDelete={async () => { await withProcessing("Deleting CapEx item...", () => api.deleteCapex(item.id)); onRefetch(); }} />
                   ))}
 
                   {tab === "subscriptions" && subscriptions.map(s => (
                     <ItemCard key={s.id} title={s.name} subtitle={`${s.billing_cycle} · due day ${s.due_day}`} badge={s.category}
                       amount={formatINR(s.amount)}
-                      onEdit={() => setEditingId(s.id)} onDelete={async () => { await api.deleteObligation(s.id); onRefetch(); }} />
+                      onEdit={() => setEditingId(s.id)} onDelete={async () => { await withProcessing("Deleting subscription...", () => api.deleteObligation(s.id)); onRefetch(); }} />
                   ))}
 
                   {tab === "emis" && emis.map(e => (
                     <ItemCard key={e.id} title={e.name} subtitle={`${e.lender} · due day ${e.due_day}`}
                       badge={`${e.paid_months} / ${e.total_months} months`}
                       amount={formatINR(e.amount)}
-                      onEdit={() => setEditingId(e.id)} onDelete={async () => { await api.deleteObligation(e.id); onRefetch(); }}
+                      onEdit={() => setEditingId(e.id)} onDelete={async () => { await withProcessing("Deleting EMI...", () => api.deleteObligation(e.id)); onRefetch(); }}
                     >
                       <div className="h-1 rounded-full bg-zinc-700 overflow-hidden">
                         <div className="h-full bg-violet-500/70 rounded-full" style={{ width: `${Math.min((e.paid_months / e.total_months) * 100, 100)}%` }} />
@@ -978,6 +1040,10 @@ export function CrudDrawer({ open, onClose, subscriptions, emis, cards, accounts
               )}
 
             </div>
+
+            {isProcessing && (
+              <div className="absolute inset-0 bg-zinc-950/55 z-10" />
+            )}
           </div>
         </div>
       </div>
