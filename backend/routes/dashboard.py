@@ -437,6 +437,14 @@ def summary():
             "obligation_type": occ.get("type"),
         })
 
+    # Filter out items the user has snoozed via email or in-app.
+    from services import snoozes as _snoozes
+    _snoozed = _snoozes.active_keys(user_id)
+    if _snoozed:
+        attention_items = [
+            it for it in attention_items
+            if it["id"] not in _snoozed   # ids are 'cc:<cid>' or 'obl:<oid>' — same as snooze keys
+        ]
     attention_items.sort(key=lambda x: (x["due_date"], -float(x.get("amount") or 0)))
 
     # Cash-flow gap totals — combined into a single round-trip.

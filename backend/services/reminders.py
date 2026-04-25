@@ -22,11 +22,13 @@ Two entry points:
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime, timedelta
 from typing import Optional
 
 from db import fetchall, fetchone, execute_void
 from modules.auth.email import send_email
+from services import magic_links, snoozes
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +70,7 @@ def send_one(user_id: str, *, force: bool = False) -> dict:
             if last_dt and (datetime.utcnow() - last_dt) < timedelta(hours=MIN_HOURS_BETWEEN_DIGESTS):
                 return {"sent": False, "reason": "too_recent"}
 
-    html = render_html(digest, user_name=user.get("name"))
+    html = render_html(digest, user_name=user.get("name"), user_id=user_id)
     subject = _subject(digest)
     try:
         send_email(user["email"], subject, html)
@@ -180,18 +182,26 @@ def build_digest(user_id: str, horizon_days: int = DEFAULT_HORIZON_DAYS) -> dict
         (user_id, today, end),
     )
 
+    snoozed = snoozes.active_keys(user_id)
+
     cc_items = [
         {
+            "cycle_id":      r["cycle_id"],
+            "item_key":      f"cc:{r['cycle_id']}",
             "title":         _cc_title(r["name"], r.get("last4")),
             "due_date":      _to_iso(r["due_date"]),
             "days_until":    (_to_date(r["due_date"]) - today).days,
             "amount":        float(r["balance_due"] or 0),
             "minimum_due":   float(r.get("minimum_due") or 0),
+            "days_until":    (_to_date(r["due_date"]) - today).days,
         }
         for r in cc_due
+        if f"cc:{r['cycle_id']}" not in snoozed
     ]
     obl_items = [
         {
+            "occ_id":     r["id"],
+            "item_key":   f"obl:{r['id']}",
             "title":      r["name"],
             "kind":       r.get("type") or "obligation",
             "due_date":   _to_iso(r["due_date"]),
@@ -199,6 +209,7 @@ def build_digest(user_id: str, horizon_days: int = DEFAULT_HORIZON_DAYS) -> dict
             "amount":     float((r["amount_due"] or 0)) - float((r.get("amount_paid") or 0)),
         }
         for r in obligations
+        if f"obl:{r['id']}" not in snoozed
     ]
 
     total = sum(c["amount"] for c in cc_items) + sum(o["amount"] for o in obl_items)
@@ -214,13 +225,18 @@ def build_digest(user_id: str, horizon_days: int = DEFAULT_HORIZON_DAYS) -> dict
 
 # ── HTML rendering ──────────────────────────────────────────────────────────
 
-def render_html(digest: dict, user_name: Optional[str] = None) -> str:
+def render_html(digest: dict, user_name: Optional[str] = None, *, user_id: Optional[str] = None) -> str:
+    """
+    Render the digest. When `user_id` is provided, action-button magic-link
+    tokens are minted for each row. The preview endpoint omits user_id —
+    in that case rows render without action buttons.
+    """
     horizon = digest["horizon_days"]
     items   = digest["credit_cards"] + digest["obligations"]
     total   = digest["total_due"]
 
-    cc_rows  = "".join(_render_cc_row(c) for c in digest["credit_cards"])
-    obl_rows = "".join(_render_obl_row(o) for o in digest["obligations"])
+    cc_rows  = "".join(_render_cc_row(c, user_id) for c in digest["credit_cards"])
+    obl_rows = "".join(_render_obl_row(o, user_id) for o in digest["obligations"])
     if cc_rows:
         cc_section = (
             '<h3 style="font-size:14px;color:#374151;margin:20px 0 8px">Credit cards</h3>'
@@ -262,30 +278,83 @@ def render_html(digest: dict, user_name: Optional[str] = None) -> str:
 """
 
 
-def _render_cc_row(c: dict) -> str:
+def _render_cc_row(c: dict, user_id: Optional[str]) -> str:
     days = c["days_until"]
     tone = "#dc2626" if days <= 0 else "#d97706" if days <= 3 else "#6b7280"
     when = _relative_day(days)
+    actions = _action_buttons(
+        user_id=user_id,
+        target_kind="billing_cycle",
+        target_id=c["cycle_id"],
+        item_key=c["item_key"],
+        title=c["title"],
+        amount=c["amount"],
+    )
     return (
         '<tr>'
-        f'<td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:14px;color:#111">{_html_escape(c["title"])}</td>'
-        f'<td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:12px;color:{tone};text-align:right">{when}</td>'
-        f'<td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:14px;color:#111;text-align:right;font-variant-numeric:tabular-nums;padding-left:16px">{_inr(c["amount"])}</td>'
+        f'<td colspan="3" style="padding:14px 0 4px;font-size:14px;color:#111">'
+        f'  <strong>{_html_escape(c["title"])}</strong>'
+        f'  <span style="color:{tone};font-size:12px;margin-left:8px">{when}</span>'
+        f'  <span style="float:right;font-variant-numeric:tabular-nums;font-weight:600">{_inr(c["amount"])}</span>'
+        '</td>'
+        '</tr>'
+        '<tr>'
+        f'<td colspan="3" style="padding:0 0 14px;border-bottom:1px solid #f3f4f6">{actions}</td>'
         '</tr>'
     )
 
 
-def _render_obl_row(o: dict) -> str:
+def _render_obl_row(o: dict, user_id: Optional[str]) -> str:
     days = o["days_until"]
     tone = "#dc2626" if days <= 0 else "#d97706" if days <= 3 else "#6b7280"
     when = _relative_day(days)
     kind = (o.get("kind") or "obligation").replace("_", " ")
+    actions = _action_buttons(
+        user_id=user_id,
+        target_kind="obligation_occurrence",
+        target_id=o["occ_id"],
+        item_key=o["item_key"],
+        title=o["title"],
+        amount=o["amount"],
+    )
     return (
         '<tr>'
-        f'<td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:14px;color:#111">{_html_escape(o["title"])} <span style="font-size:11px;color:#9ca3af">· {kind}</span></td>'
-        f'<td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:12px;color:{tone};text-align:right">{when}</td>'
-        f'<td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:14px;color:#111;text-align:right;font-variant-numeric:tabular-nums;padding-left:16px">{_inr(o["amount"])}</td>'
+        f'<td colspan="3" style="padding:14px 0 4px;font-size:14px;color:#111">'
+        f'  <strong>{_html_escape(o["title"])}</strong>'
+        f'  <span style="color:#9ca3af;font-size:11px;margin-left:6px">· {kind}</span>'
+        f'  <span style="color:{tone};font-size:12px;margin-left:8px">{when}</span>'
+        f'  <span style="float:right;font-variant-numeric:tabular-nums;font-weight:600">{_inr(o["amount"])}</span>'
+        '</td>'
         '</tr>'
+        '<tr>'
+        f'<td colspan="3" style="padding:0 0 14px;border-bottom:1px solid #f3f4f6">{actions}</td>'
+        '</tr>'
+    )
+
+
+def _action_buttons(
+    *, user_id: Optional[str], target_kind: str, target_id: str,
+    item_key: str, title: str, amount: float,
+) -> str:
+    """Render Pay-now, Mark-paid, Snooze 3d link buttons. Returns "" if no user_id (preview)."""
+    if not user_id:
+        return ""
+    base = os.environ.get("BACKEND_URL", "https://subtracker-api-n282.onrender.com").rstrip("/")
+    pay_t   = magic_links.create(user_id, "upi_redirect", target_kind=target_kind, target_id=target_id,
+                                 payload={"title": title, "amount": amount, "note": title})
+    paid_t  = magic_links.create(user_id, "mark_paid",    target_kind=target_kind, target_id=target_id,
+                                 payload={"title": title, "amount": amount})
+    snooz_t = magic_links.create(user_id, "snooze",       target_kind=target_kind, target_id=target_id,
+                                 payload={"title": title, "item_key": item_key, "snooze_days": 3})
+    style = (
+        "display:inline-block;margin:6px 8px 0 0;padding:6px 12px;"
+        "background:#f5f3ff;color:#5b21b6;border:1px solid #ddd6fe;border-radius:6px;"
+        "font-size:12px;font-weight:600;text-decoration:none"
+    )
+    return (
+        f'<a href="{base}/api/reminders/action/{pay_t}"   style="{style}">Pay now</a>'
+        f'<a href="{base}/api/reminders/action/{paid_t}"  style="{style}">Mark paid</a>'
+        f'<a href="{base}/api/reminders/action/{snooz_t}" style="{style}">Snooze 3d</a>'
     )
 
 

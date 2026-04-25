@@ -81,6 +81,27 @@ def send_test():
     return ok(result)
 
 
+@bp.post("/snooze")
+def snooze_item():
+    """In-app snooze for an attention item — same backing store as email snooze."""
+    from services import snoozes
+    body = request.get_json(silent=True) or {}
+    item_key = body.get("item_key")
+    days     = int(body.get("days", 3))
+    if not item_key:
+        return err("item_key required", 400)
+    if days < 1 or days > 30:
+        return err("days must be between 1 and 30", 400)
+    until = snoozes.snooze(g.user_id, item_key, days)
+    # Also bust the dashboard cache so the popover refreshes immediately.
+    try:
+        from routes.dashboard import invalidate_summary_cache
+        invalidate_summary_cache(g.user_id)
+    except Exception:
+        pass
+    return ok({"item_key": item_key, "snoozed_until": until.isoformat()})
+
+
 @bp.post("/cron")
 def cron():
     """

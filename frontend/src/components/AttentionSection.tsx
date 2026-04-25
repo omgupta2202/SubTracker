@@ -5,6 +5,7 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/Card";
 import { inrCompact, relativeDay } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { dismiss, isDismissed, pruneOld } from "@/lib/notificationDismiss";
+import { snoozeAttention } from "@/services/api";
 
 interface Props {
   items: AttentionItem[];
@@ -38,8 +39,13 @@ export function AttentionSection({
   const hiddenCount = items.length - visible.length;
 
   function clear(it: AttentionItem) {
+    // Local immediate UX: hide the row instantly via the dismiss store.
     dismiss(it.id, it.due_date);
     setVersion(v => v + 1);
+    // Server-side: persist a 3-day snooze keyed by the same item id.
+    // Failure is non-fatal — the local dismiss already hid the row, and
+    // pruneOld eventually cleans the local store regardless.
+    snoozeAttention(it.id, 3).catch(() => {});
   }
 
   function act(it: AttentionItem) {

@@ -315,6 +315,13 @@ export const updateReminderPrefs = (d: Partial<Pick<ReminderPrefs, "reminders_en
 export const sendTestReminder = () =>
   request<{ sent: boolean }>("/reminders/test", { method: "POST" });
 
+/** Server-side snooze for an attention item. Mirrors the email snooze. */
+export const snoozeAttention = (item_key: string, days: number = 3) =>
+  request<{ item_key: string; snoozed_until: string }>(
+    "/reminders/snooze",
+    { method: "POST", body: JSON.stringify({ item_key, days }) },
+  );
+
 // ── Obligations (Unified: subscriptions + EMIs + rent) ────────────────────
 export const getObligations = (type?: "subscription" | "emi" | "rent" | "insurance" | "sip" | "utility" | "other") => {
   const p = type ? `?type=${type}` : "";
