@@ -18,6 +18,15 @@ from services.allocation_engine import invalidate as invalidate_allocation
 bp = Blueprint("accounts", __name__, url_prefix="/api/accounts")
 
 
+def _invalidate_dashboard(user_id: str) -> None:
+    try:
+        from routes.dashboard import invalidate_summary_cache
+        invalidate_summary_cache(user_id)
+    except Exception:
+        pass
+
+
+
 def _to_legacy(row: dict, balance: float) -> dict:
     return {
         "id":         row["id"],
@@ -89,7 +98,7 @@ def create():
             idempotency_key=f"opening:{row['id']}",
         )
 
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok(_to_legacy(row, float(opening))), 201
 
 
@@ -140,7 +149,7 @@ def update(uid: str):
                 source="manual",
             )
 
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     refreshed = fetchone(
         """
         SELECT id, user_id, name, institution, kind, created_at
@@ -164,5 +173,5 @@ def delete(uid: str):
     )
     if not row:
         return err("Not found", 404)
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok({"deleted": uid})

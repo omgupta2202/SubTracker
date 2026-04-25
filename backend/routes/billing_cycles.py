@@ -23,6 +23,15 @@ log = logging.getLogger(__name__)
 bp = Blueprint("billing_cycles", __name__, url_prefix="/api/billing-cycles")
 
 
+def _invalidate_dashboard(user_id: str) -> None:
+    try:
+        from routes.dashboard import invalidate_summary_cache
+        invalidate_summary_cache(user_id)
+    except Exception:
+        pass
+
+
+
 @bp.get("/")
 def list_cycles():
     open_only  = request.args.get("open_only", "false").lower() == "true"
@@ -178,7 +187,7 @@ def update_cycle(cycle_id):
             return err("A cycle with this statement date already exists for this card.", 409)
         raise
     updated["statement_status"] = _statement_status(updated)
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok(updated)
 
 
@@ -215,7 +224,7 @@ def delete_cycle(cycle_id):
         (cycle["account_id"], cycle["account_id"], cycle["account_id"])
     )
 
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok({"deleted": True, "id": cycle_id})
 
 
@@ -308,7 +317,7 @@ def close_cycle(cycle_id):
     )
 
     updated["statement_status"] = _statement_status(updated)
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok(updated)
 
 
@@ -333,7 +342,7 @@ def reopen_cycle(cycle_id):
         (cycle_id,),
     )
     updated["statement_status"] = _statement_status(updated)
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok(updated)
 
 

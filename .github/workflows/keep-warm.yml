@@ -1,0 +1,45 @@
+# Keep the Render free-tier backend warm so the next user request doesn't
+# pay the ~30s cold-start penalty. Pings /healthz every 10 minutes; that
+# endpoint is JWT-free and does not touch the database, so the impact on
+# Supabase / Render is essentially zero.
+#
+# Cost analysis:
+#   Schedule: every 10 min × 24h × 30d = 4,320 runs/month
+#   Per run:  ~5 seconds of an ubuntu-latest runner
+#   Total:    ~360 minutes/month — well under GitHub's free 2,000 min/month
+#             quota for public repos (which is *unlimited* for private repos
+#             on free accounts up to 2,000 min anyway).
+#
+# To change the URL or cadence, edit the env block + cron schedule below.
+# To pause without deleting: GitHub repo → Actions → Keep backend warm →
+# "Disable workflow".
+
+name: Keep backend warm
+
+on:
+  schedule:
+    # GitHub cron uses UTC. "*/10" = every 10 minutes.
+    # Note: GitHub Actions can delay scheduled runs by several minutes
+    # under load. That's fine for keep-warm — Render's idle threshold is
+    # 15 minutes, so up to 4 min of slip is still safe.
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}   # also allow manual trigger from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      BACKEND_URL: https://subtracker-api-n282.onrender.com
+    steps:
+      - name: Hit /healthz
+        run: |
+          set -euo pipefail
+          # -f         fail fast on non-2xx
+          # -sS        silent but show error
+          # --max-time include cold-start window (~40s)
+          # --retry 3  retry transient failures
+          curl -fsS --max-time 60 --retry 3 --retry-delay 5 \
+            "${BACKEND_URL}/healthz"
+          echo
+          echo "✓ ${BACKEND_URL}/healthz responded ok"

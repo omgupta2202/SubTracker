@@ -16,6 +16,15 @@ from services.allocation_engine import invalidate as invalidate_allocation
 from services.categorization import infer_category
 from db import fetchone, execute_void
 
+
+def _invalidate_dashboard(user_id: str) -> None:
+    """Soft import — avoid a circular dep with routes.dashboard at import time."""
+    try:
+        from routes.dashboard import invalidate_summary_cache
+        invalidate_summary_cache(user_id)
+    except Exception:
+        pass
+
 bp = Blueprint("ledger_routes", __name__, url_prefix="/api/ledger")
 
 
@@ -69,7 +78,7 @@ def reverse_entry(entry_id):
     reason = body.get("reason", "Manual reversal")
     try:
         result = ledger.reverse_entry(entry_id, g.user_id, reason)
-        invalidate_allocation(g.user_id)
+        invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
         return ok(result)
     except LedgerError as e:
         return err(str(e), e.status)
@@ -113,7 +122,7 @@ def create_entry():
             idempotency_key=body.get("idempotency_key"),
             billing_cycle_id=body.get("billing_cycle_id"),
         )
-        invalidate_allocation(g.user_id)
+        invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
         return ok(row), 201
     except LedgerError as le:
         return err(str(le), le.status)
@@ -161,5 +170,5 @@ def assign_cycle(entry_id):
         """,
         (cycle_id, entry_id),
     )
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok({"entry_id": entry_id, "billing_cycle_id": cycle_id})

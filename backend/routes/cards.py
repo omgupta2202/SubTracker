@@ -20,6 +20,15 @@ from services.allocation_engine import invalidate as invalidate_allocation
 bp = Blueprint("cards", __name__, url_prefix="/api/cards")
 
 
+def _invalidate_dashboard(user_id: str) -> None:
+    try:
+        from routes.dashboard import invalidate_summary_cache
+        invalidate_summary_cache(user_id)
+    except Exception:
+        pass
+
+
+
 def _to_legacy(row: dict) -> dict:
     aid = row["id"]
     outstanding = float(ledger.get_cc_outstanding(aid))
@@ -108,7 +117,7 @@ def create():
             "minimum_due":      float(minimum),
         })
 
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     refreshed = fetchone(
         """
         SELECT fa.id, fa.user_id, fa.name, fa.institution, fa.created_at,
@@ -185,7 +194,7 @@ def update(uid: str):
                     list(updates.values()) + [cycle["id"]],
                 )
 
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     refreshed = fetchone(
         """
         SELECT fa.id, fa.user_id, fa.name, fa.institution, fa.created_at,
@@ -212,5 +221,5 @@ def delete(uid: str):
     )
     if not row:
         return err("Not found", 404)
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok({"deleted": uid})

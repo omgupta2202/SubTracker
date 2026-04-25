@@ -5,9 +5,27 @@ GET /api/dashboard/summary        live metrics for the main dashboard
 GET /api/dashboard/monthly-burn   burn history over N months
 GET /api/dashboard/cash-flow      inflows vs outflows over a period
 GET /api/dashboard/utilization    credit utilization per card
+
+Performance notes
+-----------------
+The summary endpoint runs several queries against the Supabase Postgres
+in Mumbai. From Render's Singapore region the round-trip is ~80ms each
+and the queries are sequential, so a cold call can hit ~800ms-1.5s.
+
+Two cheap mitigations applied here:
+
+1. In-process response cache — 30s TTL per user_id. Repeated polls (the
+   web frontend refetches on focus, etc.) are served from RAM.
+
+2. Snapshot capture is moved to a background thread. It used to fire
+   synchronously on the first call of the day, adding ~500ms-1s to that
+   one hit. Now the dashboard returns immediately and the snapshot is
+   written behind the scenes.
 """
 import calendar
 import logging
+import threading
+import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from flask import Blueprint, request, g
@@ -20,24 +38,75 @@ from services.obligation_service import get_upcoming, get_monthly_obligations_to
 log = logging.getLogger(__name__)
 
 
+# ── In-process cache ─────────────────────────────────────────────────────
+# (user_id, kind) -> (timestamp, payload)
+_CACHE_TTL_SECONDS = 30
+_cache: dict = {}
+_cache_lock = threading.Lock()
+
+
+def _cache_get(user_id: str, kind: str):
+    with _cache_lock:
+        entry = _cache.get((user_id, kind))
+    if not entry:
+        return None
+    ts, payload = entry
+    if time.time() - ts > _CACHE_TTL_SECONDS:
+        return None
+    return payload
+
+
+def _cache_put(user_id: str, kind: str, payload):
+    with _cache_lock:
+        _cache[(user_id, kind)] = (time.time(), payload)
+
+
+# ── Async snapshot capture ───────────────────────────────────────────────
+# Track which (user, date) we've already enqueued so we don't pile up
+# threads on a fast refresh loop.
+_pending_snapshots: set = set()
+_pending_lock = threading.Lock()
+
+
 def _ensure_today_snapshot(user_id: str) -> None:
     """
-    Auto-capture a daily snapshot the first time a user hits the dashboard
-    on any given day. Idempotent — `snapshot_service.capture` upserts on
-    (user_id, snapshot_date), so multiple callers in the same day are safe.
-    Failure is non-fatal: we never block the dashboard on a snapshot error.
+    Fire a snapshot capture in a background thread when today's snapshot
+    is missing. Returns immediately — the dashboard does not block on it.
+    Idempotent: snapshot_service.capture upserts on (user_id, date), and
+    the in-process pending-set prevents duplicate threads.
     """
     today_iso = date.today().isoformat()
-    try:
-        existing = fetchone(
-            "SELECT 1 FROM daily_snapshots WHERE user_id=%s AND snapshot_date=%s",
-            (user_id, today_iso),
-        )
-        if existing:
+    key = (user_id, today_iso)
+
+    with _pending_lock:
+        if key in _pending_snapshots:
             return
-        snapshot_service.capture(user_id, trigger="auto_dashboard")
-    except Exception as exc:
-        log.warning("auto-snapshot failed for user %s: %s", user_id, exc, exc_info=True)
+        _pending_snapshots.add(key)
+
+    def _run():
+        try:
+            existing = fetchone(
+                "SELECT 1 FROM daily_snapshots WHERE user_id=%s AND snapshot_date=%s",
+                (user_id, today_iso),
+            )
+            if not existing:
+                snapshot_service.capture(user_id, trigger="auto_dashboard")
+        except Exception as exc:
+            log.warning("auto-snapshot failed for user %s: %s", user_id, exc, exc_info=True)
+        finally:
+            with _pending_lock:
+                _pending_snapshots.discard(key)
+
+    threading.Thread(target=_run, daemon=True, name=f"snap:{user_id[:8]}").start()
+
+
+def invalidate_summary_cache(user_id: str) -> None:
+    """Drop the cached summary for a user. Call from any route that writes
+    state which the dashboard summary depends on (ledger entries, billing
+    cycles, financial accounts, obligations, capex, receivables, rent)."""
+    with _cache_lock:
+        _cache.pop((user_id, "summary"), None)
+
 
 bp = Blueprint("dashboard", __name__, url_prefix="/api/dashboard")
 
@@ -49,6 +118,15 @@ def summary():
     All monetary values are derived from the ledger in real time.
     """
     user_id = g.user_id
+
+    # Fast path — serve recent results from RAM. The dashboard is polled
+    # frequently by the web frontend (focus refetch), so a 30s TTL is a
+    # huge win without making numbers feel stale.
+    if request.args.get("refresh") != "true":
+        cached = _cache_get(user_id, "summary")
+        if cached is not None:
+            return ok(cached)
+
     today = date.today()
     _ensure_today_snapshot(user_id)
 
@@ -262,54 +340,50 @@ def summary():
 
     attention_items.sort(key=lambda x: (x["due_date"], -float(x.get("amount") or 0)))
 
-    # Cash flow gap
-    upcoming_obligations_30d = fetchone(
+    # Cash-flow gap totals — combined into a single round-trip.
+    # On Render→Supabase Mumbai this saves ~240ms (3 separate fetchone
+    # calls would each pay an ~80ms RTT).
+    totals = fetchone(
         """
-        SELECT COALESCE(SUM(amount_due - amount_paid), 0) AS total
-        FROM obligation_occurrences
-        WHERE user_id=%s
-          AND due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
-          AND status IN ('upcoming','partial')
+        SELECT
+          (
+            SELECT COALESCE(SUM(amount_due - amount_paid), 0)
+            FROM obligation_occurrences
+            WHERE user_id=%(uid)s
+              AND due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+              AND status IN ('upcoming','partial')
+          ) AS obligations_30d,
+          (
+            SELECT COALESCE(SUM(amount_expected - amount_received), 0)
+            FROM receivables_v2
+            WHERE user_id=%(uid)s
+              AND status IN ('expected','partially_received')
+              AND deleted_at IS NULL
+          ) AS receivables_30d,
+          (
+            SELECT COALESCE(SUM(amount_planned - amount_spent), 0)
+            FROM capex_items_v2
+            WHERE user_id=%(uid)s
+              AND status IN ('planned','in_progress')
+              AND deleted_at IS NULL
+          ) AS capex_lifetime,
+          (
+            SELECT COALESCE(SUM(amount_planned - amount_spent), 0)
+            FROM capex_items_v2
+            WHERE user_id=%(uid)s
+              AND status IN ('planned','in_progress')
+              AND deleted_at IS NULL
+              AND target_date IS NOT NULL
+              AND target_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+          ) AS capex_30d
         """,
-        (user_id,)
-    )
-    total_receivables_30d = fetchone(
-        """
-        SELECT COALESCE(SUM(amount_expected - amount_received), 0) AS total
-        FROM receivables_v2
-        WHERE user_id=%s
-          AND status IN ('expected','partially_received')
-          AND deleted_at IS NULL
-        """,
-        (user_id,)
-    )
-    total_capex_lifetime = fetchone(
-        """
-        SELECT COALESCE(SUM(amount_planned - amount_spent), 0) AS total
-        FROM capex_items_v2
-        WHERE user_id=%s AND status IN ('planned','in_progress') AND deleted_at IS NULL
-        """,
-        (user_id,)
-    )
-    # Cash-flow gap should only include capex actually due in the next 30 days,
-    # not lifetime planned spend (which can span years).
-    total_capex_30d = fetchone(
-        """
-        SELECT COALESCE(SUM(amount_planned - amount_spent), 0) AS total
-        FROM capex_items_v2
-        WHERE user_id=%s
-          AND status IN ('planned','in_progress')
-          AND deleted_at IS NULL
-          AND target_date IS NOT NULL
-          AND target_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
-        """,
-        (user_id,)
+        {"uid": user_id},
     )
 
-    obligations_30d   = Decimal(str(upcoming_obligations_30d["total"]))
-    receivables_30d   = Decimal(str(total_receivables_30d["total"]))
-    capex_lifetime    = Decimal(str(total_capex_lifetime["total"]))
-    capex_30d         = Decimal(str(total_capex_30d["total"]))
+    obligations_30d = Decimal(str(totals["obligations_30d"]))
+    receivables_30d = Decimal(str(totals["receivables_30d"]))
+    capex_lifetime  = Decimal(str(totals["capex_lifetime"]))
+    capex_30d       = Decimal(str(totals["capex_30d"]))
 
     cash_flow_gap = (
         total_liquid + receivables_30d
@@ -320,7 +394,7 @@ def summary():
         if total_cc_limit > 0 else None
     )
 
-    return ok({
+    payload = {
         "total_liquid": float(total_liquid),
         "total_cc_outstanding": float(total_cc_outstanding),
         "total_cc_minimum_due": float(total_cc_minimum),
@@ -343,7 +417,9 @@ def summary():
         "upcoming_dues_7d": upcoming_7d,
         "attention_items": attention_items[:25],
         "as_of": today.isoformat(),
-    })
+    }
+    _cache_put(user_id, "summary", payload)
+    return ok(payload)
 
 
 @bp.get("/monthly-burn")

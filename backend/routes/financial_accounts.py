@@ -21,6 +21,15 @@ from services.allocation_engine import invalidate as invalidate_allocation
 bp = Blueprint("financial_accounts", __name__, url_prefix="/api/financial-accounts")
 
 
+def _invalidate_dashboard(user_id: str) -> None:
+    try:
+        from routes.dashboard import invalidate_summary_cache
+        invalidate_summary_cache(user_id)
+    except Exception:
+        pass
+
+
+
 # ── List ──────────────────────────────────────────────────────────────────────
 
 @bp.get("/")
@@ -113,7 +122,7 @@ def create_account():
             idempotency_key=f"opening:{account['id']}",
         )
 
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok(_get_with_extensions(account["id"])), 201
 
 
@@ -177,7 +186,7 @@ def update_account(account_id):
     elif kind == "credit_card":
         _update_cc_ext(account_id, body)
 
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok(_get_with_extensions(account_id))
 
 
@@ -196,7 +205,7 @@ def delete_account(account_id):
         "UPDATE financial_accounts SET deleted_at=NOW(), updated_at=NOW() WHERE id=%s",
         (account_id,)
     )
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok({"deleted": True})
 
 
@@ -288,7 +297,7 @@ def create_billing_cycle(account_id):
         return cycle_err
     if not cycle:
         return err("Could not create billing cycle", 400)
-    invalidate_allocation(g.user_id)
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
     return ok(cycle), 201
 
 
