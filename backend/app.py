@@ -104,11 +104,24 @@ def create_app() -> Flask:
     ):
         app.register_blueprint(bp)
 
+    # Public health endpoints — used by Fly.io's http_service health check
+    # and any uptime monitor. Must be registered BEFORE require_auth.
+    @app.get("/")
+    def root():
+        return jsonify({"data": {"service": "subtracker", "ok": True}, "error": None})
+
+    @app.get("/healthz")
+    def healthz():
+        return jsonify({"data": {"ok": True}, "error": None})
+
     @app.before_request
     def require_auth():
         if request.method == "OPTIONS":
             return
-        # Auth module and Gmail OAuth callback are public
+        # Public paths — no JWT required
+        public_paths = ("/", "/healthz")
+        if request.path in public_paths:
+            return
         if request.path.startswith("/api/auth") or request.path == "/api/gmail/callback":
             return
         try:

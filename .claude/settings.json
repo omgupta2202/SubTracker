@@ -4,7 +4,8 @@
       "Bash(python3 -c ' *)",
       "Bash(npm install *)",
       "Bash(npx tsc *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\('app.py', doraise=True\\); print\\('ok'\\)\")"
     ]
   }
 }

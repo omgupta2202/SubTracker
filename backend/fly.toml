@@ -1,0 +1,32 @@
+# SubTracker backend — Fly.io app configuration.
+# Region is bom (Mumbai) because the Supabase Postgres lives in
+# aws-1-ap-south-1 — same metro keeps round-trip latency under 5ms.
+
+app            = "subtracker"
+primary_region = "bom"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port       = 8080
+  force_https         = true
+  auto_stop_machines  = "stop"   # suspend when idle → free tier stays free
+  auto_start_machines = true     # wake on incoming request
+  min_machines_running = 0       # full scale-to-zero
+
+  # Fly health-checks — hits any path that returns <500 quickly.
+  # /api/auth/login responds without auth so it's a safe ping target.
+  [[http_service.checks]]
+    interval     = "30s"
+    timeout      = "5s"
+    grace_period = "10s"
+    method       = "GET"
+    path         = "/"
+
+[[vm]]
+  cpu_kind  = "shared"
+  cpus      = 1
+  memory    = "256mb"
+
+# CORS / FRONTEND_URL etc. are set via `flyctl secrets set` — never commit them.
