@@ -33,6 +33,7 @@ from utils import ok, err
 from db import fetchall, fetchone
 from services import ledger
 from services import snapshot_service
+from services import credit_card_cycles as cc_cycles
 from services.obligation_service import get_upcoming, get_monthly_obligations_total
 
 log = logging.getLogger(__name__)
@@ -100,6 +101,102 @@ def _ensure_today_snapshot(user_id: str) -> None:
     threading.Thread(target=_run, daemon=True, name=f"snap:{user_id[:8]}").start()
 
 
+# Track which users have a rollover already running so a fast refresh loop
+# doesn't pile up threads.
+_pending_rollover: set = set()
+_pending_rollover_lock = threading.Lock()
+
+
+def _ensure_cc_rollover(user_id: str) -> None:
+    """
+    Make sure every active credit card has its past statements closed and
+    backfilled. Runs in a background thread on dashboard load — the user
+    never has to manually click into the cards UI to keep statements
+    current. Uses a per-user pending flag so multiple concurrent dashboard
+    fetches don't all spawn rollover threads.
+    """
+    with _pending_rollover_lock:
+        if user_id in _pending_rollover:
+            return
+        _pending_rollover.add(user_id)
+
+    def _run():
+        try:
+            ccs = fetchall(
+                """
+                SELECT id FROM financial_accounts
+                WHERE user_id=%s AND kind='credit_card'
+                  AND is_active=TRUE AND deleted_at IS NULL
+                """,
+                (user_id,),
+            )
+            for cc in ccs:
+                try:
+                    cc_cycles.auto_rollover(cc["id"], user_id)
+                except Exception as exc:
+                    log.warning(
+                        "auto_rollover failed for cc=%s user=%s: %s",
+                        cc["id"], user_id, exc, exc_info=True,
+                    )
+        finally:
+            with _pending_rollover_lock:
+                _pending_rollover.discard(user_id)
+
+    threading.Thread(target=_run, daemon=True, name=f"cc_roll:{user_id[:8]}").start()
+
+
+# Auto-trigger a Gmail sync from the dashboard if the user is connected
+# and hasn't synced recently. Background, non-blocking, deduped per user.
+_pending_gmail_sync: set = set()
+_pending_gmail_sync_lock = threading.Lock()
+GMAIL_AUTO_SYNC_STALE_SECONDS = 12 * 3600   # 12h between auto-syncs
+
+
+def _ensure_gmail_sync(user_id: str) -> None:
+    row = fetchone(
+        """
+        SELECT gmail_refresh_token, gmail_last_synced_at
+        FROM users WHERE id=%s
+        """,
+        (user_id,),
+    )
+    if not row or not row.get("gmail_refresh_token"):
+        return  # not connected — nothing to do
+
+    last = row.get("gmail_last_synced_at")
+    if last:
+        if isinstance(last, str):
+            try:
+                last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+            except ValueError:
+                last_dt = None
+        else:
+            last_dt = last
+        if last_dt:
+            last_naive = last_dt.replace(tzinfo=None) if last_dt.tzinfo else last_dt
+            age = (datetime.utcnow() - last_naive).total_seconds()
+            if age < GMAIL_AUTO_SYNC_STALE_SECONDS:
+                return
+
+    with _pending_gmail_sync_lock:
+        if user_id in _pending_gmail_sync:
+            return
+        _pending_gmail_sync.add(user_id)
+
+    def _run():
+        try:
+            from modules.gmail.pipeline import run_sync
+            run_sync(user_id)
+            invalidate_summary_cache(user_id)
+        except Exception as exc:
+            log.warning("auto Gmail sync failed for %s: %s", user_id, exc, exc_info=True)
+        finally:
+            with _pending_gmail_sync_lock:
+                _pending_gmail_sync.discard(user_id)
+
+    threading.Thread(target=_run, daemon=True, name=f"gmail:{user_id[:8]}").start()
+
+
 def invalidate_summary_cache(user_id: str) -> None:
     """Drop the cached summary for a user. Call from any route that writes
     state which the dashboard summary depends on (ledger entries, billing
@@ -129,6 +226,8 @@ def summary():
 
     today = date.today()
     _ensure_today_snapshot(user_id)
+    _ensure_cc_rollover(user_id)
+    _ensure_gmail_sync(user_id)
 
     # Liquid assets (single aggregate query; avoids per-account balance queries)
     liquid_accounts = fetchall(

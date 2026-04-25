@@ -36,12 +36,13 @@ import { NetWorthCard } from "./NetWorthCard";
 import { CashFlowCard } from "./CashFlowCard";
 import { CapExCard } from "./CapExCard";
 import { ReceivablesCard } from "./ReceivablesCard";
+import { CardDetailDrawer } from "./CardDetailDrawer";
 import { HistoryPanel } from "./HistoryPanel";
 import { DashboardFilterBar, loadFilters, isFilterActive } from "./DashboardFilterBar";
 import { AttentionSection } from "./AttentionSection";
 import { RecurringSuggestionsStrip } from "./RecurringSuggestionsStrip";
 import { CommandPalette } from "./CommandPalette";
-import { cn } from "@/lib/utils";
+import { cn, flashCard } from "@/lib/utils";
 
 export function Dashboard() {
   const { logout, user } = useAuth();
@@ -57,6 +58,7 @@ export function Dashboard() {
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [activeCard, setActiveCard] = useState<{ id: string; name: string; last4: string | null; bank: string | null } | null>(null);
   const [filters, setFilters] = useState<DashboardFilters>(loadFilters);
   const [attentionOpen, setAttentionOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -132,6 +134,12 @@ export function Dashboard() {
             rentDueDay={rent.due_day}
             onRefetch={refetchAll}
             onHide={() => hide("net-worth")}
+            onOpenCard={(c) => setActiveCard({
+              id: c.id,
+              name: c.name,
+              last4: c.last4 ?? null,
+              bank: (c as any).bank ?? null,
+            })}
           />
         );
       case "cash-flow":
@@ -287,7 +295,26 @@ export function Dashboard() {
       )}
       {attentionOpen && (
         <div className="fixed right-6 top-[60px] w-[380px] z-[70]">
-          <AttentionSection items={dashSummary?.attention_items ?? []} loading={lDash && !dashSummary} embedded />
+          <AttentionSection
+            items={dashSummary?.attention_items ?? []}
+            loading={lDash && !dashSummary}
+            embedded
+            onActed={() => closeAllPopovers()}
+            onOpenCard={(accountId, title) => {
+              const meta = (dashSummary?.credit_cards ?? []).find(c => c.id === accountId);
+              const fallback = cards.find(c => c.id === accountId);
+              setActiveCard({
+                id:    accountId,
+                name:  (meta as any)?.name ?? fallback?.name ?? title,
+                last4: (meta as any)?.last4 ?? fallback?.last4 ?? null,
+                bank:  (meta as any)?.bank  ?? (fallback as any)?.bank ?? null,
+              });
+              // Flash the Net Worth card behind the drawer so the user can
+              // see context if they close the drawer right away.
+              flashCard("net-worth");
+            }}
+            onOpenObligations={() => flashCard("monthly-burn")}
+          />
         </div>
       )}
       {filterOpen && (
@@ -313,7 +340,7 @@ export function Dashboard() {
       )}
 
       <div className="max-w-[1400px] mx-auto px-6 py-6">
-        <RecurringSuggestionsStrip onConvert={() => setPaletteOpen(true)} />
+        <RecurringSuggestionsStrip onConverted={refetchAll} />
 
         {/*
           Drag-and-drop masonry. Three independent columns; cards reorder
@@ -384,6 +411,16 @@ export function Dashboard() {
         onOpenChange={setPaletteOpen}
         onCreated={() => refetchAll()}
       />
+
+      <CardDetailDrawer
+        cardId={activeCard?.id ?? null}
+        cardName={activeCard?.name ?? null}
+        cardLast4={activeCard?.last4 ?? null}
+        cardBank={activeCard?.bank ?? null}
+        accounts={accounts}
+        onClose={() => setActiveCard(null)}
+        onChange={refetchAll}
+      />
     </div>
   );
 }
@@ -434,9 +471,13 @@ function DroppableColumn({
     <div className={cn("flex flex-col gap-5", className)}>
       <SortableContext items={cardIds} strategy={verticalListSortingStrategy}>
         {cardIds.map(cardId => (
-          <SortableCard key={cardId} id={cardId}>
-            {renderCard(cardId)}
-          </SortableCard>
+          // data-card-id lets external code (e.g. the notification list)
+          // scroll the dashboard to a specific card via querySelector.
+          <div key={cardId} data-card-id={cardId} className="rounded-2xl">
+            <SortableCard id={cardId}>
+              {renderCard(cardId)}
+            </SortableCard>
+          </div>
         ))}
       </SortableContext>
       {/* Empty drop zone — receives drags when the column has no children

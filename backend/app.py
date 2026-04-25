@@ -54,6 +54,7 @@ from routes.billing_cycles     import bp as billing_cycles_bp
 from routes.allocation         import bp as allocation_bp
 from routes.daily_logs         import bp as daily_logs_bp
 from routes.dashboard          import bp as dashboard_bp
+from routes.reminders          import bp as reminders_bp
 
 # ── Modules ───────────────────────────────────────────────────────────────────
 from modules.auth  import bp as auth_bp
@@ -98,6 +99,7 @@ def create_app() -> Flask:
         allocation_bp,
         daily_logs_bp,
         dashboard_bp,
+        reminders_bp,
         # Modules
         auth_bp,
         gmail_bp,
@@ -123,6 +125,9 @@ def create_app() -> Flask:
         if request.path in public_paths:
             return
         if request.path.startswith("/api/auth") or request.path == "/api/gmail/callback":
+            return
+        # Cron endpoint authenticates via shared secret, not JWT
+        if request.path == "/api/reminders/cron":
             return
         try:
             verify_jwt_in_request()

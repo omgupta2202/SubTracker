@@ -46,3 +46,37 @@
   50%      { opacity: 0.55; }
 }
 .pulse-soft { animation: pulse-soft 2.4s ease-in-out infinite; }
+
+/* Indeterminate top progress bar — sweeps a gradient back and forth. */
+@keyframes progress-sweep {
+  0%   { background-position:   0% 0%; }
+  100% { background-position: 200% 0%; }
+}
+.animate-progress-sweep {
+  animation: progress-sweep 1.4s linear infinite;
+}
+
+/*
+ * "You-are-here" highlight used when a notification redirects to a card.
+ * Three pulses of a violet ring + soft tint so the user can spot the
+ * target even if the scroll lands them mid-screen. ~2.1s total.
+ */
+@keyframes flash-highlight {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0);
+    background-color: rgba(139, 92, 246, 0);
+  }
+  10%, 30%, 50% {
+    box-shadow: 0 0 0 6px rgba(139, 92, 246, 0.55),
+                0 0 32px 4px rgba(139, 92, 246, 0.30);
+    background-color: rgba(139, 92, 246, 0.08);
+  }
+  20%, 40%, 60% {
+    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0);
+    background-color: rgba(139, 92, 246, 0);
+  }
+}
+.flash-target {
+  animation: flash-highlight 2.1s cubic-bezier(0.4, 0, 0.2, 1) 1;
+  border-radius: inherit;
+}

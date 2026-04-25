@@ -346,6 +346,98 @@ def reopen_cycle(cycle_id):
     return ok(updated)
 
 
+# ── Pay a statement: creates a cc_payment ledger entry on a source account
+#    and bumps total_paid on the cycle. Used by the "Pay min / pay full /
+#    pay custom" flow in the CC card detail UI.
+@bp.post("/<cycle_id>/pay")
+def pay_cycle(cycle_id):
+    body = request.get_json(silent=True) or {}
+    cycle = fetchone(
+        """
+        SELECT bc.*, fa.name AS card_name
+        FROM billing_cycles bc
+        JOIN financial_accounts fa ON fa.id = bc.account_id
+        WHERE bc.id=%s AND bc.user_id=%s AND bc.deleted_at IS NULL
+        """,
+        (cycle_id, g.user_id),
+    )
+    if not cycle:
+        return err("Billing cycle not found", 404)
+
+    # Resolve amount + source account
+    try:
+        amount = Decimal(str(body.get("amount") or 0))
+    except Exception:
+        return err("amount must be numeric", 400)
+    if amount <= 0:
+        return err("amount must be > 0", 400)
+
+    source_account_id = body.get("source_account_id")
+    if not source_account_id:
+        return err("source_account_id is required", 400)
+
+    src = fetchone(
+        """
+        SELECT id, kind FROM financial_accounts
+        WHERE id=%s AND user_id=%s AND deleted_at IS NULL
+        """,
+        (source_account_id, g.user_id),
+    )
+    if not src:
+        return err("Source account not found", 404)
+    if src["kind"] not in ("bank", "wallet", "cash"):
+        return err("Source must be a bank, wallet, or cash account", 400)
+
+    eff_date_raw = body.get("effective_date")
+    eff_date = _parse_date(eff_date_raw) if eff_date_raw else date.today()
+
+    # Two ledger entries: debit source, credit the CC (CC credit reduces outstanding).
+    src_entry = ledger.post_entry(
+        user_id=g.user_id,
+        account_id=source_account_id,
+        direction="debit",
+        amount=amount,
+        description=f"Payment to {cycle['card_name']}",
+        effective_date=eff_date,
+        category="cc_payment",
+        source="manual",
+        idempotency_key=f"pay_cycle:{cycle_id}:src:{eff_date.isoformat()}:{int(amount * 100)}",
+    )
+    cc_entry = ledger.post_entry(
+        user_id=g.user_id,
+        account_id=cycle["account_id"],
+        direction="credit",
+        amount=amount,
+        description=f"Payment from account",
+        effective_date=eff_date,
+        category="cc_payment",
+        source="manual",
+        idempotency_key=f"pay_cycle:{cycle_id}:cc:{eff_date.isoformat()}:{int(amount * 100)}",
+        billing_cycle_id=cycle_id,
+    )
+
+    # Bump total_paid on the cycle so status/balance_due reflect it instantly.
+    new_total_paid = (cycle.get("total_paid") or Decimal("0")) + amount
+    updated = execute(
+        """
+        UPDATE billing_cycles
+        SET total_paid=%s, updated_at=NOW()
+        WHERE id=%s
+        RETURNING *
+        """,
+        (new_total_paid, cycle_id),
+    )
+    updated["statement_status"] = _statement_status(updated)
+
+    invalidate_allocation(g.user_id); _invalidate_dashboard(g.user_id)
+    return ok({
+        "cycle":          updated,
+        "source_entry":   src_entry,
+        "cc_entry":       cc_entry,
+        "new_total_paid": float(new_total_paid),
+    })
+
+
 @bp.get("/account/<account_id>/overview")
 def cycle_overview(account_id):
     acc = fetchone(

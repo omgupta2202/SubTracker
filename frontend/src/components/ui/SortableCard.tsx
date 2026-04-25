@@ -40,7 +40,9 @@ export function SortableCard({
         isDragging && "z-30 opacity-70",
       )}
     >
-      {/* Drag handle — hover-revealed, doesn't shift card layout */}
+      {/* Drag handle — floats ON the card's top-left border as a circular
+          chip, mirroring the close (X) chip on the right. Never overlaps
+          card content because it sits outside the padding. */}
       <button
         type="button"
         {...attributes}
@@ -48,13 +50,15 @@ export function SortableCard({
         title="Drag to reorder"
         aria-label="Drag handle"
         className={cn(
-          "absolute top-3 left-3 z-10 p-1 rounded-md cursor-grab active:cursor-grabbing",
-          "text-zinc-600 hover:text-zinc-200 hover:bg-zinc-800/70",
-          "opacity-0 group-hover/sortable:opacity-100 transition-opacity",
+          "absolute -top-2 -left-2 z-20 cursor-grab active:cursor-grabbing",
+          "h-6 w-6 rounded-full flex items-center justify-center",
+          "bg-zinc-800 border border-zinc-700/80 shadow",
+          "text-zinc-300 hover:text-white hover:bg-zinc-700",
+          "opacity-70 group-hover/sortable:opacity-100 transition-opacity",
           "touch-none",
         )}
       >
-        <GripVertical size={13} />
+        <GripVertical size={12} />
       </button>
       {children}
     </div>

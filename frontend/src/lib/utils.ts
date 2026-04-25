@@ -34,3 +34,29 @@ export function daysUntil(target: Date): number {
   t.setHours(0, 0, 0, 0);
   return Math.round((t.getTime() - today.getTime()) / 86_400_000);
 }
+
+/**
+ * Scroll an element into view and play the 3-pulse violet highlight.
+ * Used when a notification redirects to a dashboard section so the user
+ * doesn't lose track of where the scroll landed.
+ *
+ * Looks up the element by `[data-card-id="…"]` because Dashboard tags
+ * each rendered card slot that way.
+ */
+export function flashCard(cardId: string): void {
+  // Defer to next frame so React has committed any state that toggled the
+  // card visible (e.g. restoring a hidden card before flashing it).
+  requestAnimationFrame(() => {
+    const el = document.querySelector(
+      `[data-card-id="${cardId}"]`,
+    ) as HTMLElement | null;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Remove any prior animation so re-clicking the same notification
+    // restarts the pulse from frame 0.
+    el.classList.remove("flash-target");
+    void el.offsetWidth; // force reflow so the class re-add restarts the keyframes
+    el.classList.add("flash-target");
+    window.setTimeout(() => el.classList.remove("flash-target"), 2200);
+  });
+}

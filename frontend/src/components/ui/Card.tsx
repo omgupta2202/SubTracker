@@ -42,12 +42,17 @@ export function Card({ className, variant = "default", bare = false, onHide, chi
           title="Hide this section"
           aria-label="Hide section"
           className={cn(
-            "absolute top-3 right-3 z-10 p-1 rounded-md",
-            "text-zinc-600 hover:text-zinc-200 hover:bg-zinc-800/70",
-            "opacity-0 group-hover:opacity-100 transition-opacity",
+            // Float ON the card's top-right border, not inside the padding —
+            // so it never overlaps title/CardAction. Circular chip with its
+            // own background so it visually separates from card content.
+            "absolute -top-2 -right-2 z-20",
+            "h-6 w-6 rounded-full flex items-center justify-center",
+            "bg-zinc-800 border border-zinc-700/80 shadow",
+            "text-zinc-300 hover:text-white hover:bg-zinc-700",
+            "opacity-70 group-hover:opacity-100 transition-opacity",
           )}
         >
-          <X size={13} />
+          <X size={12} />
         </button>
       )}
       {children}

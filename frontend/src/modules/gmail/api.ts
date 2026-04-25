@@ -1,6 +1,7 @@
 import type { GmailStatus, SyncResult, RecurringSuggestion } from "./types";
 
 import { getApiBase } from "@/lib/apiBase";
+import { track, kindForMethod } from "@/lib/loadingBus";
 
 const BASE = getApiBase();
 
@@ -10,27 +11,32 @@ function getAuthHeaders(): Record<string, string> {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...getAuthHeaders(),
-      ...(options?.headers as Record<string, string> | undefined),
-    },
-  });
+  const done = track(kindForMethod(options?.method));
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeaders(),
+        ...(options?.headers as Record<string, string> | undefined),
+      },
+    });
 
-  if (res.status === 401) {
-    localStorage.removeItem("auth_token");
-    localStorage.removeItem("auth_user");
-    window.location.reload();
-    throw new Error("Unauthorized");
-  }
+    if (res.status === 401) {
+      localStorage.removeItem("auth_token");
+      localStorage.removeItem("auth_user");
+      window.location.reload();
+      throw new Error("Unauthorized");
+    }
 
-  const json = (await res.json()) as { data: T | null; error: string | null };
-  if (!res.ok || json.error) {
-    throw new Error(json.error ?? `HTTP ${res.status}`);
+    const json = (await res.json()) as { data: T | null; error: string | null };
+    if (!res.ok || json.error) {
+      throw new Error(json.error ?? `HTTP ${res.status}`);
+    }
+    return json.data as T;
+  } finally {
+    done();
   }
-  return json.data as T;
 }
 
 export const getGmailStatus = () =>

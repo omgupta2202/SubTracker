@@ -40,5 +40,9 @@ mobile/ios/
 *.swp
 *.swo
 
+# Local Claude Code config (per-machine settings, not for source control)
+.claude/settings.json
+.claude/settings.local.json
+
 # OS
 Thumbs.db

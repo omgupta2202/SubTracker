@@ -20,6 +20,7 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [name, setName]         = useState("");
   const [loading, setLoading]   = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError]       = useState("");
   const [success, setSuccess]   = useState("");
 
@@ -47,11 +48,14 @@ export function LoginPage() {
   const handleGoogleSuccess = async (res: CredentialResponse) => {
     if (!res.credential) return;
     clearMessages();
+    setGoogleLoading(true);
     try {
       const data = await googleLogin(res.credential);
       login(data.access_token, data.user);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Google sign-in failed.");
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -163,7 +167,7 @@ export function LoginPage() {
           </div>
 
           {/* Google SSO — width must be a number of px (max 400), not a CSS string. */}
-          <div className="flex justify-center">
+          <div className="flex justify-center relative">
             <GoogleLogin
               onSuccess={handleGoogleSuccess}
               onError={() => setError("Google sign-in failed.")}
@@ -172,6 +176,19 @@ export function LoginPage() {
               shape="rectangular"
               width={320}
             />
+            {/* Overlay shown only while we're exchanging the Google credential
+                with our backend. Blocks re-clicks and gives clear feedback. */}
+            {googleLoading && (
+              <div
+                className="absolute inset-0 flex items-center justify-center gap-2
+                           rounded-lg bg-zinc-950/80 backdrop-blur-sm
+                           text-sm text-zinc-200 font-medium select-none"
+                aria-live="polite"
+              >
+                <span className="h-4 w-4 rounded-full border-2 border-zinc-600 border-t-violet-400 animate-spin" />
+                Signing you in…
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -4,6 +4,10 @@ import { GoogleOAuthProvider } from "@react-oauth/google";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
+import { registerSW } from "virtual:pwa-register";
+// `autoUpdate` strategy in vite.config — service worker registers itself
+// and silently swaps in new builds when ready.
+registerSW({ immediate: true });
 import App from "./App";
 import { AuthProvider } from "@/modules/auth";
 import { ToastProvider } from "@/components/ToastProvider";

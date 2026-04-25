@@ -34,6 +34,8 @@ interface Props {
   rentDueDay?: number;
   onRefetch: () => void;
   onHide?: () => void;
+  /** Tap a CC row to open the per-card detail drawer (statements + pay flow). */
+  onOpenCard?: (card: CreditCardSnapshot) => void;
 }
 
 const BANK_DOT: Record<string, string> = {
@@ -45,7 +47,7 @@ const BANK_DOT: Record<string, string> = {
 };
 const dot = (b?: string) => BANK_DOT[b ?? ""] ?? "bg-zinc-500";
 
-export function NetWorthCard({ accounts, cards, rent = 0, rentDueDay, onRefetch, onHide }: Props) {
+export function NetWorthCard({ accounts, cards, rent = 0, rentDueDay, onRefetch, onHide, onOpenCard }: Props) {
   const [editing, setEditing] = useState(false);
   const [showCards, setShowCards] = useState(false);
   const [rentEditing, setRentEditing] = useState(false);
@@ -313,6 +315,7 @@ export function NetWorthCard({ accounts, cards, rent = 0, rentDueDay, onRefetch,
                 return (
                   <Row
                     key={c.id}
+                    onClick={onOpenCard ? () => onOpenCard(c) : undefined}
                     dot="bg-red-500/60"
                     label={
                       <span className="flex items-center gap-1.5">

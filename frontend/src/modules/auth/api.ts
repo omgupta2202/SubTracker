@@ -7,17 +7,23 @@
  */
 import type { AuthUser } from "./types";
 import { getApiBase } from "@/lib/apiBase";
+import { track, kindForMethod } from "@/lib/loadingBus";
 
 const BASE = `${getApiBase()}/auth`;
 
 async function authFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const res  = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  const json = (await res.json()) as { data: T | null; error: string | null };
-  if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
-  return json.data as T;
+  const done = track(kindForMethod(options?.method));
+  try {
+    const res  = await fetch(`${BASE}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+    const json = (await res.json()) as { data: T | null; error: string | null };
+    if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
+    return json.data as T;
+  } finally {
+    done();
+  }
 }
 
 export interface LoginResponse {

@@ -6,6 +6,7 @@ import type {
   DashboardSummary, MonthlyBurnItem, FinancialAccount, Obligation,
 } from "@/types";
 import { getApiBase } from "@/lib/apiBase";
+import { track, kindForMethod } from "@/lib/loadingBus";
 
 const BASE = getApiBase();
 
@@ -16,28 +17,33 @@ function getAuthHeaders(): Record<string, string> {
 
 /** All backend responses are wrapped: { data: T | null, error: string | null } */
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...getAuthHeaders(),
-      ...(options?.headers as Record<string, string> | undefined),
-    },
-  });
+  const done = track(kindForMethod(options?.method));
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeaders(),
+        ...(options?.headers as Record<string, string> | undefined),
+      },
+    });
 
-  if (res.status === 401) {
-    localStorage.removeItem("auth_token");
-    localStorage.removeItem("auth_user");
-    window.location.reload();
-    throw new Error("Unauthorized");
+    if (res.status === 401) {
+      localStorage.removeItem("auth_token");
+      localStorage.removeItem("auth_user");
+      window.location.reload();
+      throw new Error("Unauthorized");
+    }
+
+    const json = await res.json() as { data: T | null; error: string | null };
+
+    if (!res.ok || json.error) {
+      throw new Error(json.error ?? `HTTP ${res.status}`);
+    }
+    return json.data as T;
+  } finally {
+    done();
   }
-
-  const json = await res.json() as { data: T | null; error: string | null };
-
-  if (!res.ok || json.error) {
-    throw new Error(json.error ?? `HTTP ${res.status}`);
-  }
-  return json.data as T;
 }
 
 // ── Subscriptions ──────────────────────────────────────────────────────────
@@ -278,6 +284,36 @@ export const getBillingCycleOverview = (accountId: string) =>
   request<{ account_id: string; current_cycle: BillingCycle | null; last_statement: BillingCycle | null; past_statements: BillingCycle[] }>(
     `/billing-cycles/account/${accountId}/overview`
   );
+
+/** Pay a statement: posts a `cc_payment` ledger entry from a source account
+ *  and bumps the cycle's total_paid. The backend handles the double-entry. */
+export const payBillingCycle = (
+  cycleId: string,
+  d: { amount: number; source_account_id: string; effective_date?: string },
+) =>
+  request<{ cycle: BillingCycle; new_total_paid: number }>(
+    `/billing-cycles/${cycleId}/pay`,
+    { method: "POST", body: JSON.stringify(d) },
+  );
+
+/** Fetch one billing cycle's full detail including its linked transactions. */
+export const getBillingCycle = (cycleId: string) =>
+  request<BillingCycle & { entries: AccountLedgerEntry[] }>(
+    `/billing-cycles/${cycleId}`,
+  );
+
+// ── Email reminders ───────────────────────────────────────────────────────
+export interface ReminderPrefs {
+  reminders_enabled: boolean;
+  reminders_horizon_days: number;
+  reminders_last_sent_at: string | null;
+}
+export const getReminderPrefs = () =>
+  request<ReminderPrefs>("/reminders/preferences");
+export const updateReminderPrefs = (d: Partial<Pick<ReminderPrefs, "reminders_enabled" | "reminders_horizon_days">>) =>
+  request<ReminderPrefs>("/reminders/preferences", { method: "PUT", body: JSON.stringify(d) });
+export const sendTestReminder = () =>
+  request<{ sent: boolean }>("/reminders/test", { method: "POST" });
 
 // ── Obligations (Unified: subscriptions + EMIs + rent) ────────────────────
 export const getObligations = (type?: "subscription" | "emi" | "rent" | "insurance" | "sip" | "utility" | "other") => {

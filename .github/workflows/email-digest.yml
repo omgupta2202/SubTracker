@@ -1,0 +1,44 @@
+# Daily email-digest fan-out.
+#
+# Hits /api/reminders/cron with the shared secret stored in repo secrets
+# as CRON_SECRET. The route iterates all users whose reminders are
+# enabled and last-sent is >22h old.
+#
+# Schedule: 03:30 UTC = 09:00 IST. Tweak the cron line for your timezone.
+# Using `runs-on: ubuntu-latest` to use the free Actions quota
+# (~5s per run).
+#
+# To set up:
+#   1. Generate a long random string locally:  openssl rand -hex 32
+#   2. On Render → Environment → add CRON_SECRET=<that string>
+#   3. On GitHub repo → Settings → Secrets → Actions → New repo secret
+#      Name=CRON_SECRET, Value=<same string>
+name: Daily email digest
+
+on:
+  schedule:
+    - cron: "30 3 * * *"   # 03:30 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  fanout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BACKEND_URL: https://subtracker-api-n282.onrender.com
+    steps:
+      - name: POST /api/reminders/cron
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::CRON_SECRET repo secret is not set"
+            exit 1
+          fi
+          curl -fsS --max-time 90 --retry 2 --retry-delay 10 \
+            -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${BACKEND_URL}/api/reminders/cron"
+          echo
+          echo "✓ digest fan-out complete"

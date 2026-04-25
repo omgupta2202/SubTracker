@@ -35,13 +35,22 @@ _HTML_TEMPLATE = """
 
 def send_confirmation(to_email: str, confirm_url: str) -> None:
     """Send an account-confirmation email. Auto-selects provider."""
+    send_email(
+        to_email,
+        "Confirm your SubTracker account",
+        _HTML_TEMPLATE.format(url=confirm_url),
+    )
+
+
+def send_email(to_email: str, subject: str, html: str) -> None:
+    """Generic email send used by both auth confirmations and reminder digests."""
     if os.environ.get("RESEND_API_KEY"):
-        _send_via_resend(to_email, confirm_url)
+        _send_via_resend(to_email, subject, html)
     else:
-        _send_via_smtp(to_email, confirm_url)
+        _send_via_smtp(to_email, subject, html)
 
 
-def _send_via_resend(to_email: str, confirm_url: str) -> None:
+def _send_via_resend(to_email: str, subject: str, html: str) -> None:
     try:
         import resend  # pip install resend
     except ImportError:
@@ -51,12 +60,12 @@ def _send_via_resend(to_email: str, confirm_url: str) -> None:
     resend.Emails.send({
         "from":    os.environ.get("SMTP_FROM", "onboarding@resend.dev"),
         "to":      to_email,
-        "subject": "Confirm your SubTracker account",
-        "html":    _HTML_TEMPLATE.format(url=confirm_url),
+        "subject": subject,
+        "html":    html,
     })
 
 
-def _send_via_smtp(to_email: str, confirm_url: str) -> None:
+def _send_via_smtp(to_email: str, subject: str, html: str) -> None:
     smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.environ.get("SMTP_PORT", "587"))
     smtp_user = os.environ.get("SMTP_USER", "")
@@ -64,10 +73,10 @@ def _send_via_smtp(to_email: str, confirm_url: str) -> None:
     from_addr = os.environ.get("SMTP_FROM", smtp_user)
 
     msg            = MIMEMultipart("alternative")
-    msg["Subject"] = "Confirm your SubTracker account"
+    msg["Subject"] = subject
     msg["From"]    = from_addr
     msg["To"]      = to_email
-    msg.attach(MIMEText(_HTML_TEMPLATE.format(url=confirm_url), "html"))
+    msg.attach(MIMEText(html, "html"))
 
     with smtplib.SMTP(smtp_host, smtp_port) as server:
         server.starttls()
