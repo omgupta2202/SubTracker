@@ -16,6 +16,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(JSON.parse(storedUser));
     }
     setLoading(false);
+
+    // Listen for the global logout signal dispatched by the API client
+    // when the server confirms a token is invalid. This avoids force
+    // page-reloads for transient 401s — see `verifyTokenStillValid` in
+    // services/api.ts.
+    const onLogoutSignal = () => {
+      setToken(null);
+      setUser(null);
+    };
+    window.addEventListener("subtracker:logout", onLogoutSignal);
+    return () => window.removeEventListener("subtracker:logout", onLogoutSignal);
   }, []);
 
   const login = (accessToken: string, userData: AuthUser) => {

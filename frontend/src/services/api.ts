@@ -15,6 +15,49 @@ function getAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/**
+ * Confirmed-logout latch. The previous version of `request()` wiped the
+ * token + force-reloaded on *any* 401, which is hostile in real-world
+ * conditions: a single transient 401 (Render cold start, mid-deploy
+ * request, JWT-init race during boot, parallel call dispatched before
+ * the token had been hydrated) would log the user out and reload the
+ * page, undoing their work.
+ *
+ * The fix: only declare the user logged-out after a *confirming* round-trip
+ * against `/auth/me`. That endpoint is cheap and authoritative — if the
+ * token is actually invalid/expired it will 401; if not, the original
+ * 401 was transient and we simply throw so the caller can retry.
+ *
+ * The verification is also debounced — we never run more than one in
+ * flight, and we cache the recent result for a few seconds so a burst of
+ * parallel 401s only triggers one check.
+ */
+let inFlightVerify: Promise<boolean> | null = null;
+let lastVerifyAt = 0;
+let lastVerifyValid = true;
+
+async function verifyTokenStillValid(): Promise<boolean> {
+  const now = Date.now();
+  // Cache: if we re-checked in the last 5s, reuse the answer.
+  if (now - lastVerifyAt < 5000) return lastVerifyValid;
+  if (inFlightVerify) return inFlightVerify;
+  inFlightVerify = (async () => {
+    try {
+      const r = await fetch(`${BASE}/auth/me`, { headers: { ...getAuthHeaders() } });
+      lastVerifyValid = r.status !== 401;
+      return lastVerifyValid;
+    } catch {
+      // Network error: treat as "still valid" — we can't prove it's bad.
+      lastVerifyValid = true;
+      return true;
+    } finally {
+      lastVerifyAt = Date.now();
+      inFlightVerify = null;
+    }
+  })();
+  return inFlightVerify;
+}
+
 /** All backend responses are wrapped: { data: T | null, error: string | null } */
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const done = track(kindForMethod(options?.method));
@@ -29,9 +72,22 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     });
 
     if (res.status === 401) {
+      // Skip the verify dance for the verify endpoint itself.
+      const isVerifyCall = path === "/auth/me";
+      const hadToken = !!localStorage.getItem("auth_token");
+      if (hadToken && !isVerifyCall) {
+        const stillValid = await verifyTokenStillValid();
+        if (stillValid) {
+          // Transient 401 — surface the error but keep the session.
+          throw new Error("Request failed (please retry)");
+        }
+      }
+      // Token is genuinely invalid — clear and surface a logout signal.
+      // No window.location.reload(): React rerenders cleanly via the
+      // auth context once `auth_token` is gone and a future 401 arrives.
       localStorage.removeItem("auth_token");
       localStorage.removeItem("auth_user");
-      window.location.reload();
+      window.dispatchEvent(new Event("subtracker:logout"));
       throw new Error("Unauthorized");
     }
 
@@ -333,6 +389,15 @@ export interface TripSummary {
   status: "active" | "settled" | "archived";
   note: string | null;
   created_at: string;
+  /** Aggregates added by the enriched list endpoint so the list view can
+   *  render summary tiles without a per-row detail fetch. */
+  total_spent?: number;
+  expenses_count?: number;
+  members_count?: number;
+  /** Net balance for the current viewer in this trip (paid − share).
+   *  Positive = they're owed; negative = they owe. NULL if the viewer
+   *  isn't a member (only possible for creator-of-empty-trip edge case). */
+  my_balance?: number | null;
 }
 export interface TripMember {
   id: string;
@@ -400,6 +465,8 @@ export const createTrip    = (d: { name: string; start_date?: string; end_date?:
 export const getTrip       = (id: string) => request<TripDetail>(`/trips/${id}`);
 export const updateTrip    = (id: string, d: Partial<Pick<TripSummary, "name" | "start_date" | "end_date" | "note" | "status">>) =>
   request<TripDetail>(`/trips/${id}`, { method: "PUT", body: JSON.stringify(d) });
+export const deleteTrip    = (id: string) =>
+  request<{ deleted: boolean }>(`/trips/${id}`, { method: "DELETE" });
 export const inviteTripMember = (id: string, d: { email: string; display_name: string }) =>
   request<TripMember>(`/trips/${id}/members`, { method: "POST", body: JSON.stringify(d) });
 export const removeTripMember = (id: string, memberId: string) =>
@@ -420,6 +487,19 @@ export const addTripExpense = (
     note?: string;
   },
 ) => request<TripExpense>(`/trips/${id}/expenses`, { method: "POST", body: JSON.stringify(d) });
+export const updateTripExpense = (
+  id: string, eid: string,
+  d: Partial<{
+    payer_id: string;
+    description: string;
+    amount: number;
+    expense_date: string;
+    split_kind: "equal" | "custom";
+    splits: TripExpenseSplit[];
+    payments: TripExpensePayment[];
+    note: string | null;
+  }>,
+) => request<TripExpense>(`/trips/${id}/expenses/${eid}`, { method: "PUT", body: JSON.stringify(d) });
 export const deleteTripExpense = (id: string, eid: string) =>
   request<{ deleted: boolean }>(`/trips/${id}/expenses/${eid}`, { method: "DELETE" });
 export const getTripSettlement = (id: string) =>
@@ -454,6 +534,21 @@ export const guestAddTripExpense = (
     note?: string;
   },
 ) => guestRequest<TripExpense>(`/trips/guest/${token}/expenses`, { method: "POST", body: JSON.stringify(d) });
+export const guestUpdateTripExpense = (
+  token: string, eid: string,
+  d: Partial<{
+    payer_id: string;
+    description: string;
+    amount: number;
+    expense_date: string;
+    split_kind: "equal" | "custom";
+    splits: TripExpenseSplit[];
+    payments: TripExpensePayment[];
+    note: string | null;
+  }>,
+) => guestRequest<TripExpense>(`/trips/guest/${token}/expenses/${eid}`, { method: "PUT", body: JSON.stringify(d) });
+export const guestDeleteTripExpense = (token: string, eid: string) =>
+  guestRequest<{ deleted: boolean }>(`/trips/guest/${token}/expenses/${eid}`, { method: "DELETE" });
 export const guestUpdateMe = (token: string, d: { display_name?: string; upi_id?: string }) =>
   guestRequest<TripMember>(`/trips/guest/${token}/me`, { method: "PATCH", body: JSON.stringify(d) });
 

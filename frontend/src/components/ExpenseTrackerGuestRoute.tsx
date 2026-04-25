@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Users, Receipt, Sparkles, Loader2, ExternalLink, Pencil,
+  Users, Receipt, Loader2, ExternalLink, Pencil,
+  Search, X, Trash2, Plus, TrendingUp, TrendingDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { inrCompact, inr, relativeTime, fullTimestamp } from "@/lib/tokens";
 import * as api from "@/services/api";
-import type { TripDetail, TripMember, TripExpenseSplit } from "@/services/api";
+import type { TripDetail, TripMember, TripExpense, TripExpenseSplit } from "@/services/api";
 
 /**
  * Guest entry point — opened by anyone holding the magic-link from an
@@ -21,12 +22,13 @@ import type { TripDetail, TripMember, TripExpenseSplit } from "@/services/api";
 
 const STORAGE_KEY = "subtracker:guest-trip-token";
 
-export function TripGuestRoute({ token }: { token: string }) {
+export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
   const [trip, setTrip]     = useState<(TripDetail & { me: TripMember }) | null>(null);
   const [error, setError]   = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
+  const [sheet, setSheet]     = useState<TripExpense | "new" | null>(null);
   const [editingMe, setEditingMe] = useState(false);
+  const [search, setSearch]   = useState("");
 
   async function refresh() {
     setLoading(true);
@@ -39,6 +41,22 @@ export function TripGuestRoute({ token }: { token: string }) {
     } finally { setLoading(false); }
   }
   useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, [token]);
+
+  const myStats = useMemo(() => {
+    if (!trip) return null;
+    let paid = 0, share = 0;
+    for (const e of trip.expenses) {
+      if (e.payments?.length) {
+        const mine = e.payments.find(p => p.member_id === trip.me.id);
+        if (mine) paid += Number(mine.amount);
+      } else if (e.payer_id === trip.me.id) {
+        paid += Number(e.amount);
+      }
+      const s = e.splits.find(x => x.member_id === trip.me.id);
+      if (s) share += Number(s.share);
+    }
+    return { paid: +paid.toFixed(2), share: +share.toFixed(2) };
+  }, [trip]);
 
   if (loading && !trip) {
     return <Center><Loader2 size={20} className="text-violet-400 animate-spin" /></Center>;
@@ -56,6 +74,16 @@ export function TripGuestRoute({ token }: { token: string }) {
   if (!trip) return null;
 
   const myBal = trip.balances.find(b => b.member_id === trip.me.id);
+  const totalSpent = trip.expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+
+  const q = search.trim().toLowerCase();
+  const filteredExpenses = q
+    ? trip.expenses.filter(e =>
+        e.description.toLowerCase().includes(q)
+        || (e.payments?.length ? e.payments.map(p => p.member_id) : [e.payer_id])
+            .some(id => trip.members.find(m => m.id === id)?.display_name?.toLowerCase().includes(q))
+      )
+    : trip.expenses;
 
   return (
     <div className="min-h-screen bg-zinc-950">
@@ -77,45 +105,49 @@ export function TripGuestRoute({ token }: { token: string }) {
         </div>
       </header>
 
-      <div className="max-w-[760px] mx-auto px-5 py-6 flex flex-col gap-5">
-        {/* My balance */}
-        <div className="rounded-2xl border border-zinc-800/60 bg-gradient-to-br from-zinc-900 to-zinc-950 p-5"
+      <div className="max-w-[760px] mx-auto px-5 py-6 pb-28 flex flex-col gap-5">
+        {/* Hero — your balance + trip total */}
+        <div className="relative overflow-hidden rounded-3xl border border-zinc-800/60 bg-gradient-to-br from-violet-500/10 via-zinc-900 to-zinc-950 p-6"
              title="Net amount across the whole trip: positive means people owe you; negative means you owe.">
-          <div className="text-[11px] uppercase tracking-wider font-semibold text-zinc-500 mb-1">Your balance</div>
-          {myBal ? (
-            <div className={cn(
-              "num text-3xl font-semibold",
-              myBal.net > 0.01 ? "text-emerald-400" :
-              myBal.net < -0.01 ? "text-red-400" :
-                                  "text-zinc-100",
-            )}>
-              {myBal.net > 0.01  ? `+${inr(myBal.net)} you'll receive`  :
-               myBal.net < -0.01 ? `${inr(myBal.net)} you owe` :
-                                   "settled · ₹0"}
+          <div aria-hidden className="pointer-events-none absolute -top-16 -right-16 w-44 h-44 rounded-full bg-violet-500/15 blur-3xl" />
+          <div aria-hidden className="pointer-events-none absolute -bottom-16 -left-12 w-44 h-44 rounded-full bg-fuchsia-500/10 blur-3xl" />
+          <div className="relative flex items-start justify-between gap-4 flex-wrap">
+            <div className="min-w-0">
+              <div className="text-[11px] uppercase tracking-wider font-semibold text-zinc-400 mb-1">Your balance</div>
+              {myBal ? (
+                <div className={cn(
+                  "num text-4xl font-semibold tracking-tight",
+                  myBal.net > 0.01 ? "text-emerald-400" :
+                  myBal.net < -0.01 ? "text-red-400" :
+                                      "text-zinc-100",
+                )}>
+                  {myBal.net > 0.01  ? `+${inr(myBal.net)}`  :
+                   myBal.net < -0.01 ? `${inr(myBal.net)}`   :
+                                       "settled · ₹0"}
+                </div>
+              ) : (
+                <div className="text-sm text-zinc-500">No expenses involving you yet.</div>
+              )}
+              {myBal && myBal.net !== 0 && (
+                <div className="text-xs text-zinc-500 mt-1">
+                  {myBal.net > 0.01 ? "you'll receive" : "you owe"}
+                </div>
+              )}
+              <div className="mt-3 text-[11px] text-zinc-500 flex flex-wrap gap-x-3 gap-y-1">
+                <span>paid <span className="num text-zinc-300">{inrCompact(myStats?.paid ?? 0)}</span></span>
+                <span>your share <span className="num text-zinc-300">{inrCompact(myStats?.share ?? 0)}</span></span>
+                <span>trip total <span className="num text-zinc-300">{inrCompact(totalSpent)}</span></span>
+              </div>
             </div>
-          ) : (
-            <div className="text-sm text-zinc-500">No expenses involving you yet.</div>
-          )}
-          <div className="mt-3 text-[11px] text-zinc-500">
-            paid <span className="num text-zinc-300">{inrCompact(myBal?.paid ?? 0)}</span>{" · "}
-            owe <span className="num text-zinc-300">{inrCompact(myBal?.owed ?? 0)}</span>
           </div>
         </div>
-
-        <button
-          onClick={() => setShowAdd(true)}
-          title="Record a shared expense — pick who paid and who should split it"
-          className="self-start inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium"
-        >
-          <Sparkles size={14} /> Add expense
-        </button>
 
         {/* Members balances */}
         <section>
           <SectionTitle>Who owes whom</SectionTitle>
-          <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900 mt-2">
+          <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/60 mt-2 overflow-hidden">
             {trip.balances.map(b => (
-              <div key={b.member_id} className="flex items-center px-4 py-2.5 border-b border-zinc-800/60 last:border-0">
+              <div key={b.member_id} className="flex items-center px-4 py-2.5 border-b border-zinc-800/40 last:border-0">
                 <span className="text-sm text-zinc-200 flex-1 truncate">{b.display_name}</span>
                 <span className={cn(
                   "num text-sm",
@@ -132,53 +164,57 @@ export function TripGuestRoute({ token }: { token: string }) {
           </div>
         </section>
 
-        {/* Expenses */}
-        <section>
-          <SectionTitle>Expenses · {trip.expenses.length}</SectionTitle>
-          <div className="mt-2 flex flex-col">
-            {trip.expenses.length === 0 ? (
-              <p className="text-sm text-zinc-500 text-center py-8 rounded-xl border border-dashed border-zinc-800">
-                No expenses yet. Tap "Add expense" to start.
+        {/* Stats — who spent how much */}
+        {trip.expenses.length > 0 && (
+          <section>
+            <SectionTitle>Who spent how much</SectionTitle>
+            <GuestStatsGrid trip={trip} />
+          </section>
+        )}
+
+        {/* Search + Expenses */}
+        <section className="flex flex-col gap-2">
+          <div className="flex items-baseline justify-between">
+            <SectionTitle>Expenses · {trip.expenses.length}</SectionTitle>
+          </div>
+          {trip.expenses.length > 0 && (
+            <div className="relative">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search expenses or payers…"
+                className="w-full pl-8 pr-8 py-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-violet-500/50"
+              />
+              {search && (
+                <button onClick={() => setSearch("")}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-zinc-500 hover:text-zinc-200">
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/40 mt-1 overflow-hidden">
+            {filteredExpenses.length === 0 ? (
+              <p className="text-sm text-zinc-500 text-center py-8">
+                {search ? "No expenses match that search." : "No expenses yet. Tap \"Add expense\" to start."}
               </p>
-            ) : (
-              trip.expenses.map(e => {
-                const payer = trip.members.find(m => m.id === e.payer_id);
-                const multi = (e.payments?.length ?? 0) > 1;
-                const payerLabel = multi
-                  ? `${e.payments.length} paid`
-                  : `${payer?.display_name ?? "?"} paid`;
-                return (
-                  <div key={e.id} className="flex items-center gap-3 px-2 py-2.5 border-b border-zinc-800/60">
-                    <Receipt size={14} className="text-zinc-500 shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm text-zinc-100 truncate">{e.description}</div>
-                      <div className="text-[11px] text-zinc-500 num truncate">
-                        {payerLabel} · {e.expense_date}
-                        {multi && (
-                          <span className="ml-1 text-zinc-600">
-                            (
-                            {e.payments.map((p, i) => {
-                              const m = trip.members.find(mm => mm.id === p.member_id);
-                              return (
-                                <span key={p.member_id}>
-                                  {i > 0 && ", "}
-                                  {m?.display_name ?? "?"} {inrCompact(p.amount)}
-                                </span>
-                              );
-                            })}
-                            )
-                          </span>
-                        )}
-                        <span className="ml-1 text-zinc-600" title={`Added ${fullTimestamp(e.created_at)}`}>
-                          · added {relativeTime(e.created_at)}
-                        </span>
-                      </div>
-                    </div>
-                    <span className="num text-sm text-zinc-100 shrink-0">{inrCompact(e.amount)}</span>
-                  </div>
-                );
-              })
-            )}
+            ) : filteredExpenses.map(e => (
+              <GuestExpenseRow
+                key={e.id}
+                expense={e}
+                members={trip.members}
+                onEdit={() => setSheet(e)}
+                onDelete={async () => {
+                  if (!confirm("Delete this expense?")) return;
+                  try {
+                    await api.guestDeleteTripExpense(token, e.id);
+                    await refresh();
+                  } catch (err) { alert((err as Error).message); }
+                }}
+              />
+            ))}
           </div>
         </section>
 
@@ -186,12 +222,26 @@ export function TripGuestRoute({ token }: { token: string }) {
         <SettleStrip trip={trip} />
       </div>
 
-      {showAdd && (
-        <AddExpenseSheetGuest
+      {/* Sticky FAB */}
+      <div className="fixed bottom-4 inset-x-0 z-[40] pointer-events-none">
+        <div className="max-w-[760px] mx-auto px-5 flex justify-end">
+          <button
+            onClick={() => setSheet("new")}
+            title="Record a shared expense"
+            className="pointer-events-auto inline-flex items-center gap-2 px-4 py-3 rounded-full bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium shadow-2xl shadow-violet-900/40 ring-1 ring-violet-400/30"
+          >
+            <Plus size={16} /> Add expense
+          </button>
+        </div>
+      </div>
+
+      {sheet && (
+        <ExpenseSheetGuest
           trip={trip}
           token={token}
-          onClose={() => setShowAdd(false)}
-          onSaved={async () => { setShowAdd(false); await refresh(); }}
+          existing={sheet === "new" ? undefined : sheet}
+          onClose={() => setSheet(null)}
+          onSaved={async () => { setSheet(null); await refresh(); }}
         />
       )}
       {editingMe && (
@@ -202,6 +252,149 @@ export function TripGuestRoute({ token }: { token: string }) {
           onSaved={async () => { setEditingMe(false); await refresh(); }}
         />
       )}
+    </div>
+  );
+}
+
+/* ── Guest expense row with edit + delete ── */
+
+function GuestExpenseRow({
+  expense, members, onEdit, onDelete,
+}: {
+  expense: TripExpense;
+  members: TripMember[];
+  onEdit: () => void;
+  onDelete: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const payer = members.find(m => m.id === expense.payer_id);
+  const multi = (expense.payments?.length ?? 0) > 1;
+  const payerLabel = multi ? `${expense.payments.length} paid` : `${payer?.display_name ?? "?"} paid`;
+  return (
+    <div className="border-b border-zinc-800/40 last:border-b-0 hover:bg-zinc-800/20 transition-colors">
+      <div className="px-3 sm:px-4 py-3 flex items-center gap-3">
+        <button onClick={() => setOpen(o => !o)}
+                className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                title="Click to see split details">
+          <span className="h-8 w-8 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-300 shrink-0">
+            <Receipt size={14} />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm text-zinc-100 truncate">{expense.description}</div>
+            <div className="text-[11px] text-zinc-500 num truncate">
+              {payerLabel} · {expense.expense_date}
+              <span className="ml-1 text-zinc-600" title={`Added ${fullTimestamp(expense.created_at)}`}>
+                · {relativeTime(expense.created_at)}
+              </span>
+            </div>
+          </div>
+          <span className="num text-sm font-medium text-zinc-100 shrink-0">{inrCompact(expense.amount)}</span>
+        </button>
+        <button onClick={onEdit} title="Edit this expense"
+                className="p-1.5 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/70">
+          <Pencil size={12} />
+        </button>
+      </div>
+      {open && (
+        <div className="px-3 sm:px-4 pb-3 ml-11 pl-3 border-l border-zinc-800 flex flex-col gap-2">
+          {multi && (
+            <div className="flex flex-col gap-1">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500">Paid by</div>
+              {expense.payments.map(p => {
+                const m = members.find(mm => mm.id === p.member_id);
+                return (
+                  <div key={p.member_id} className="flex items-center justify-between text-xs text-zinc-400">
+                    <span>{m?.display_name ?? "?"}</span>
+                    <span className="num text-zinc-300">{inrCompact(p.amount)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="flex flex-col gap-1">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500">Split</div>
+            {expense.splits.map(s => {
+              const m = members.find(mm => mm.id === s.member_id);
+              return (
+                <div key={s.member_id} className="flex items-center justify-between text-xs text-zinc-400">
+                  <span>{m?.display_name ?? "?"}</span>
+                  <span className="num text-zinc-300">{inrCompact(s.share)}</span>
+                </div>
+              );
+            })}
+          </div>
+          <button onClick={onDelete}
+                  title="Permanently remove this expense"
+                  className="self-start mt-1 inline-flex items-center gap-1 text-[11px] text-red-400 hover:text-red-300">
+            <Trash2 size={11} /> Delete expense
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Lite stats grid for the guest view ── */
+
+function GuestStatsGrid({ trip }: { trip: TripDetail & { me: TripMember } }) {
+  const stats = useMemo(() => {
+    const totalCost = trip.expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+    return trip.members.map(m => {
+      let paid = 0, share = 0;
+      for (const e of trip.expenses) {
+        if (e.payments?.length) {
+          const mine = e.payments.find(p => p.member_id === m.id);
+          if (mine) paid += Number(mine.amount);
+        } else if (e.payer_id === m.id) {
+          paid += Number(e.amount);
+        }
+        const s = e.splits.find(x => x.member_id === m.id);
+        if (s) share += Number(s.share);
+      }
+      return {
+        member_id: m.id,
+        display_name: m.display_name,
+        paid: +paid.toFixed(2),
+        share: +share.toFixed(2),
+        net: +(paid - share).toFixed(2),
+        share_pct: totalCost > 0 ? paid / totalCost : 0,
+      };
+    }).sort((a, b) => b.paid - a.paid);
+  }, [trip]);
+  const maxPaid = Math.max(1, ...stats.map(s => s.paid));
+
+  return (
+    <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-4 mt-2 flex flex-col gap-3">
+      {stats.map(s => {
+        const trend = s.net > 0.01 ? "up" : s.net < -0.01 ? "down" : "flat";
+        return (
+          <div key={s.member_id}>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-sm text-zinc-100 truncate">{s.display_name}</span>
+              <span className="num text-sm text-zinc-100">{inrCompact(s.paid)}</span>
+            </div>
+            <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-violet-500 to-fuchsia-400"
+                   style={{ width: `${(s.paid / maxPaid) * 100}%` }} />
+            </div>
+            <div className="flex items-center justify-between mt-1.5 text-[11px] text-zinc-500 num">
+              <span>share {inrCompact(s.share)}</span>
+              <span className={cn(
+                "inline-flex items-center gap-1",
+                trend === "up"   ? "text-emerald-400" :
+                trend === "down" ? "text-red-400"     :
+                                   "text-zinc-500",
+              )}>
+                {trend === "up"   && <TrendingUp size={11} />}
+                {trend === "down" && <TrendingDown size={11} />}
+                {trend === "flat" ? "settled" :
+                 trend === "up"   ? `+${inrCompact(s.net)}` :
+                                    inrCompact(s.net)}
+              </span>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -280,23 +473,51 @@ function greedy(rows: { id: string; name: string; net: number }[]) {
   return out;
 }
 
-/* ── Guest add-expense sheet (subset of the owner one) ── */
+/* ── Guest expense sheet — add + edit ── */
 
-function AddExpenseSheetGuest({
-  trip, token, onClose, onSaved,
+function ExpenseSheetGuest({
+  trip, token, existing, onClose, onSaved,
 }: {
   trip: TripDetail & { me: TripMember };
   token: string;
+  existing?: TripExpense;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
-  const [description, setDescription] = useState("");
-  const [amount, setAmount]           = useState("");
-  const [included, setIncluded]       = useState<Set<string>>(new Set(trip.members.map(m => m.id)));
-  // Mirror of owner-side AddExpenseSheet: single payer or partial (multi-payer).
-  const [paymentKind, setPaymentKind] = useState<"single" | "partial">("single");
-  const [singlePayer, setSinglePayer] = useState<string>(trip.me.id);
-  const [paid, setPaid]               = useState<Record<string, string>>({});
+  const initial = useMemo(() => {
+    if (!existing) {
+      return {
+        description: "",
+        amount: "",
+        date: new Date().toISOString().slice(0, 10),
+        included: new Set(trip.members.map(m => m.id)),
+        paymentKind: "single" as const,
+        singlePayer: trip.me.id,
+        paid: {} as Record<string, string>,
+      };
+    }
+    const includedIds = new Set(existing.splits.map(s => s.member_id));
+    const paidRec: Record<string, string> = {};
+    (existing.payments ?? []).forEach(p => { paidRec[p.member_id] = String(p.amount); });
+    const isMulti = (existing.payments?.length ?? 0) > 1;
+    return {
+      description: existing.description,
+      amount: String(existing.amount),
+      date: existing.expense_date,
+      included: includedIds,
+      paymentKind: (isMulti ? "partial" : "single") as "single" | "partial",
+      singlePayer: existing.payer_id,
+      paid: paidRec,
+    };
+  }, [existing, trip.members, trip.me.id]);
+
+  const [description, setDescription] = useState(initial.description);
+  const [amount, setAmount]           = useState(initial.amount);
+  const [date, setDate]               = useState(initial.date);
+  const [included, setIncluded]       = useState<Set<string>>(initial.included);
+  const [paymentKind, setPaymentKind] = useState<"single" | "partial">(initial.paymentKind);
+  const [singlePayer, setSinglePayer] = useState<string>(initial.singlePayer);
+  const [paid, setPaid]               = useState<Record<string, string>>(initial.paid);
   const [saving, setSaving]           = useState(false);
 
   const amt = Number(amount) || 0;
@@ -337,33 +558,47 @@ function AddExpenseSheetGuest({
         if (payments.length > 0) {
           primaryPayerId = payments.reduce((max, p) => (p.amount > max.amount ? p : max)).member_id;
         }
+      } else {
+        payments = [{ member_id: primaryPayerId, amount: amt }];
       }
 
-      await api.guestAddTripExpense(token, {
+      const payload = {
         payer_id: primaryPayerId,
         description: description.trim(),
         amount: amt,
+        expense_date: date,
         split_kind: kind,
         splits,
         payments,
-      });
+      };
+      if (existing) {
+        await api.guestUpdateTripExpense(token, existing.id, payload);
+      } else {
+        await api.guestAddTripExpense(token, payload);
+      }
       await onSaved();
     } catch (e) { alert((e as Error).message); }
     finally { setSaving(false); }
   }
 
   return (
-    <Sheet onClose={onClose} title="Add expense">
+    <Sheet onClose={onClose} title={existing ? "Edit expense" : "Add expense"}>
       <form onSubmit={save} className="flex flex-col gap-3">
         <Field label="What was it?">
           <input className={inputCls} placeholder="Dinner at Beach Cafe" autoFocus
                  value={description} onChange={e => setDescription(e.target.value)} />
         </Field>
 
-        <Field label="Amount (₹)">
-          <input className={inputCls} type="number" inputMode="decimal" placeholder="0"
-                 value={amount} onChange={e => setAmount(e.target.value)} />
-        </Field>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+          <Field label="Amount (₹)">
+            <input className={inputCls} type="number" inputMode="decimal" placeholder="0"
+                   value={amount} onChange={e => setAmount(e.target.value)} />
+          </Field>
+          <Field label="Date">
+            <input className={inputCls} type="date"
+                   value={date} onChange={e => setDate(e.target.value)} />
+          </Field>
+        </div>
 
         <Field label="Paid by" hint="Who actually paid the bill. Use Partial when more than one person chipped in.">
           <div className="flex items-center gap-1 mb-2">
@@ -443,7 +678,7 @@ function AddExpenseSheetGuest({
           <button type="button" onClick={onClose} className="px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200">Cancel</button>
           <button type="submit" disabled={saving}
                   className="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium disabled:opacity-50">
-            {saving ? "Saving…" : "Save expense"}
+            {saving ? "Saving…" : existing ? "Save changes" : "Save expense"}
           </button>
         </div>
       </form>

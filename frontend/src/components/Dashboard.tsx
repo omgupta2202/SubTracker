@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Eye } from "lucide-react";
 import {
   DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors,
@@ -15,7 +15,7 @@ import {
 } from "@/lib/layoutStore";
 import {
   History, BellRing, SlidersHorizontal,
-  Plus, LogOut, Search, User as UserIcon, ChevronDown,
+  Plus, LogOut, Search, User as UserIcon,
 } from "lucide-react";
 import { useAuth } from "@/modules/auth";
 import { useSubscriptions } from "@/hooks/useSubscriptions";
@@ -37,7 +37,8 @@ import { CashFlowCard } from "./CashFlowCard";
 import { CapExCard } from "./CapExCard";
 import { ReceivablesCard } from "./ReceivablesCard";
 import { CardDetailDrawer } from "./CardDetailDrawer";
-import { AppsLauncher } from "./AppsLauncher";
+import { AppSwitcher } from "./AppSwitcher";
+import { DashboardPulse } from "./DashboardPulse";
 import { HistoryPanel } from "./HistoryPanel";
 import { DashboardFilterBar, loadFilters, isFilterActive } from "./DashboardFilterBar";
 import { AttentionSection } from "./AttentionSection";
@@ -64,12 +65,17 @@ export function Dashboard() {
   const [attentionOpen, setAttentionOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [layout, setLayout] = useState(loadLayout);
+  const [layout, setLayout] = useState(() => loadLayout(user?.id));
   const [activeDragId, setActiveDragId] = useState<CardId | null>(null);
+
+  // Account switch on the same browser → re-hydrate that user's layout.
+  useEffect(() => {
+    setLayout(loadLayout(user?.id));
+  }, [user?.id]);
 
   function commitLayout(next: typeof layout) {
     setLayout(next);
-    saveLayout(next);
+    saveLayout(next, user?.id);
   }
   function hide(id: CardId)    { commitLayout(hideCard(layout, id));    }
   function restore(id: CardId) { commitLayout(restoreCard(layout, id)); }
@@ -195,27 +201,40 @@ export function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950">
-      {/* Header */}
-      <header className="sticky top-0 z-20 backdrop-blur-md bg-zinc-950/85 border-b border-zinc-800/60">
-        <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center gap-4">
-          <div className="flex items-baseline gap-3">
+    <div className="min-h-screen bg-zinc-950 relative">
+      {/* Ambient backdrop — subtle violet/fuchsia glow at the top to give
+          the dashboard a 2026'ish gradient horizon without affecting any
+          existing card layout below it. */}
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[420px] overflow-hidden">
+        <div className="absolute -top-40 left-1/3 w-[640px] h-[640px] rounded-full bg-violet-500/10 blur-3xl" />
+        <div className="absolute -top-32 -right-24 w-[480px] h-[480px] rounded-full bg-fuchsia-500/10 blur-3xl" />
+      </div>
+
+      {/* Header — three groups: brand · search · actions. Groups are
+          separated by tiny vertical dividers so the row reads as
+          structured rather than cluttered. */}
+      <header className="relative sticky top-0 z-20 backdrop-blur-md bg-zinc-950/85 border-b border-zinc-800/60">
+        <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center gap-3">
+          {/* Group 1 — brand */}
+          <div className="flex items-baseline gap-2.5">
             <h1 className="text-base font-semibold tracking-tight text-zinc-100">SubTracker</h1>
-            <span className="text-xs text-zinc-500">{monthLabel}</span>
+            <span className="hidden sm:inline text-[11px] text-zinc-500">{monthLabel}</span>
           </div>
 
+          {/* Group 2 — search (compact) */}
           <button
             onClick={() => setPaletteOpen(true)}
-            className="flex-1 max-w-md ml-6 hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg
+            className="flex-1 max-w-sm ml-4 hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg
                        bg-zinc-900/60 border border-zinc-800 hover:border-zinc-700
-                       text-zinc-500 hover:text-zinc-300 text-sm transition-colors"
+                       text-zinc-500 hover:text-zinc-300 text-[13px] transition-colors"
           >
-            <Search size={13} />
-            <span className="flex-1 text-left">Add transaction, subscription, EMI…</span>
+            <Search size={12} />
+            <span className="flex-1 text-left truncate">Search or add anything…</span>
             <kbd className="hidden lg:inline text-[10px] font-mono text-zinc-600 border border-zinc-700/60 rounded px-1.5 py-0.5">⌘K</kbd>
           </button>
 
-          <div className="flex items-center gap-1 ml-auto">
+          {/* Group 3 — actions, visually grouped with a left divider */}
+          <div className="flex items-center gap-0.5 ml-auto pl-3 border-l border-zinc-800/60">
             <IconBtn
               onClick={() => {
                 setAttentionOpen(v => !v);
@@ -246,37 +265,40 @@ export function Dashboard() {
               <History size={16} />
             </IconBtn>
 
-            <AppsLauncher />
+            <AppSwitcher current="dashboard" />
 
-            <button
-              onClick={() => setPaletteOpen(true)}
-              className="ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium transition-colors"
-            >
-              <Plus size={15} />
-              <span className="hidden sm:inline">Add</span>
-            </button>
-
-            {user && (
+            {/* Group 4 — primary action + user, separated by a divider */}
+            <div className="flex items-center gap-1 ml-2 pl-2 border-l border-zinc-800/60">
               <button
-                onClick={() => {
-                  setProfileOpen(v => !v);
-                  setAttentionOpen(false);
-                  setFilterOpen(false);
-                }}
-                className={cn(
-                  "ml-2 flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-full transition-colors",
-                  profileOpen ? "bg-zinc-800" : "hover:bg-zinc-800/70",
-                )}
-                title={user.email}
+                onClick={() => setPaletteOpen(true)}
+                title="Quickly add a transaction, subscription, EMI, or any item (⌘K)"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium transition-colors shadow-lg shadow-violet-600/25 ring-1 ring-violet-400/20"
               >
-                <span className="w-7 h-7 rounded-full bg-violet-500/20 border border-violet-500/30 flex items-center justify-center text-violet-300 text-[11px] font-bold uppercase overflow-hidden">
-                  {user.avatar_url
-                    ? <img src={user.avatar_url} alt="" className="w-full h-full object-cover" />
-                    : (user.name || user.email)[0]}
-                </span>
-                <ChevronDown size={12} className="text-zinc-500" />
+                <Plus size={15} />
+                <span className="hidden sm:inline">Add</span>
               </button>
-            )}
+
+              {user && (
+                <button
+                  onClick={() => {
+                    setProfileOpen(v => !v);
+                    setAttentionOpen(false);
+                    setFilterOpen(false);
+                  }}
+                  className={cn(
+                    "ml-1 flex items-center pl-0.5 pr-0.5 py-0.5 rounded-full transition-colors",
+                    profileOpen ? "bg-zinc-800" : "hover:bg-zinc-800/70",
+                  )}
+                  title={user.email}
+                >
+                  <span className="w-7 h-7 rounded-full bg-violet-500/20 border border-violet-500/30 flex items-center justify-center text-violet-300 text-[11px] font-bold uppercase overflow-hidden">
+                    {user.avatar_url
+                      ? <img src={user.avatar_url} alt="" className="w-full h-full object-cover" />
+                      : (user.name || user.email)[0]}
+                  </span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -342,7 +364,9 @@ export function Dashboard() {
         </div>
       )}
 
-      <div className="max-w-[1400px] mx-auto px-6 py-6">
+      <div className="relative max-w-[1400px] mx-auto px-6 py-6">
+        <DashboardPulse summary={dashSummary} loading={lDash} />
+
         <RecurringSuggestionsStrip onConverted={refetchAll} />
 
         {/*

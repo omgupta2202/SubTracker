@@ -57,7 +57,7 @@ from routes.daily_logs         import bp as daily_logs_bp
 from routes.dashboard          import bp as dashboard_bp
 from routes.reminders          import bp as reminders_bp
 from routes.reminder_actions   import bp as reminder_actions_bp
-from routes.trips              import bp as trips_bp, guest_bp as trips_guest_bp
+from routes.expense_tracker    import bp as trips_bp, guest_bp as trips_guest_bp
 
 # ── Modules ───────────────────────────────────────────────────────────────────
 from modules.auth  import bp as auth_bp

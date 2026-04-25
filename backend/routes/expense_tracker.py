@@ -1,5 +1,12 @@
 """
-Trip-tracker routes.
+Expense Tracker routes (formerly "Trips" — rebranded user-side).
+
+The DB tables (`trips`, `trip_members`, `trip_expenses`...) and the URL
+prefix `/api/trips` remain unchanged so existing magic-link invite emails
+in the wild keep working. Internal terminology stays "trip" = one
+expense-tracking instance (a trip, a roommate group, a recurring
+dinner-club ledger — anything with a fixed set of members splitting
+shared costs).
 
 Owner-side (JWT-auth, /api/trips/*):
   GET    /                  list user's trips
@@ -24,7 +31,7 @@ from flask import Blueprint, request, g
 
 from utils import ok, err, require_fields
 from db import fetchone
-from services import trips
+from services import expense_tracker as trips
 from modules.auth.email import send_email
 
 bp = Blueprint("trips", __name__, url_prefix="/api/trips")
@@ -61,6 +68,13 @@ def get(trip_id):
     if not trip:
         return err("Trip not found", 404)
     return ok(trip)
+
+
+@bp.delete("/<trip_id>")
+def delete(trip_id):
+    if not trips.delete_trip(trip_id, g.user_id):
+        return err("Only the creator can delete this trip", 403)
+    return ok({"deleted": True})
 
 
 @bp.put("/<trip_id>")
@@ -142,7 +156,12 @@ def create_expense(trip_id):
 def edit_expense(trip_id, eid):
     body = request.get_json() or {}
     if "expense_date" in body: body["expense_date"] = _parse_date(body["expense_date"])
-    row = trips.update_expense(eid, body)
+    if "amount" in body and body["amount"] is not None:
+        body["amount"] = float(body["amount"])
+    try:
+        row = trips.update_expense(eid, body)
+    except ValueError as ex:
+        return err(str(ex), 400)
     if not row:
         return err("Expense not found", 404)
     return ok(row)
@@ -210,6 +229,40 @@ def guest_add_expense(token):
     except ValueError as ex:
         return err(str(ex), 400)
     return ok(row), 201
+
+
+@guest_bp.put("/<token>/expenses/<eid>")
+def guest_edit_expense(token, eid):
+    member = trips.member_for_token(token)
+    if not member:
+        return err("Invite not found", 404)
+    # Belongs-to check: refuse edits of expenses on other trips.
+    exp = fetchone("SELECT trip_id FROM trip_expenses WHERE id=%s", (eid,))
+    if not exp or exp["trip_id"] != member["trip_id"]:
+        return err("Expense not found", 404)
+    body = request.get_json() or {}
+    if "expense_date" in body: body["expense_date"] = _parse_date(body["expense_date"])
+    if "amount" in body and body["amount"] is not None:
+        body["amount"] = float(body["amount"])
+    try:
+        row = trips.update_expense(eid, body)
+    except ValueError as ex:
+        return err(str(ex), 400)
+    if not row:
+        return err("Expense not found", 404)
+    return ok(row)
+
+
+@guest_bp.delete("/<token>/expenses/<eid>")
+def guest_delete_expense(token, eid):
+    member = trips.member_for_token(token)
+    if not member:
+        return err("Invite not found", 404)
+    exp = fetchone("SELECT trip_id FROM trip_expenses WHERE id=%s", (eid,))
+    if not exp or exp["trip_id"] != member["trip_id"]:
+        return err("Expense not found", 404)
+    trips.delete_expense(eid)
+    return ok({"deleted": True})
 
 
 @guest_bp.patch("/<token>/me")

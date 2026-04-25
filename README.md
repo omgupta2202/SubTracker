@@ -1,125 +1,214 @@
-# Hi there, I'm Om Gupta
+# SubTracker
 
-### Backend Systems Engineer | Distributed Systems | AI Orchestration
+SubTracker is a personal finance dashboard with a ledger-first backend architecture.
 
-Living in the space between a user's intent and a sub-100ms response.
+It tracks:
+- Financial accounts (bank/wallet/cash/credit card)
+- Recurring obligations (subscriptions/EMIs/rent)
+- Receivables and CapEx plans
+- Dashboard analytics and smart payment allocation
+- Gmail ingestion for card transaction/statement extraction
 
-I architect the invisible backbone of high-performance applications. I specialize in designing scalable APIs, optimizing complex database schemas, and integrating agentic AI workflows into production environments.
+## Stack
 
-## Current Focus
+| Layer | Tech |
+|---|---|
+| Web | React 18 + TypeScript + Vite + TailwindCSS |
+| Mobile | React Native + Expo |
+| Backend | Flask + Flask-JWT-Extended + Flask-CORS |
+| DB | PostgreSQL |
+| Auth | Email/password + Google SSO |
 
-- Optimizing hybrid search logic for high-dimensional vector databases.
-- Scaling asynchronous event-driven pipelines with Celery and Redis.
-- Architecting multi-agent workflows for autonomous commerce.
+## Repo Layout
 
-## Tech Stack
+```text
+backend/    Flask API + services + migrations
+frontend/   Web app
+mobile/     Expo app
+```
 
-### Backend and Systems
+## Prerequisites
 
-![Python](https://img.shields.io/badge/-Python-3776AB?style=flat-square&logo=python&logoColor=white)
-![Django](https://img.shields.io/badge/-Django-092E20?style=flat-square&logo=django&logoColor=white)
-![FastAPI](https://img.shields.io/badge/-FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
-![Node.js](https://img.shields.io/badge/-Node.js-339933?style=flat-square&logo=node.js&logoColor=white)
+- Python 3.8+
+- Node.js 18+
+- PostgreSQL database
+- Google OAuth credentials (for Gmail + Google login)
 
-Specialization: Microservices, GraphQL, event-driven architecture.
+## Environment
 
-### Data and Intelligence
+### `backend/.env`
 
-![PostgreSQL](https://img.shields.io/badge/-PostgreSQL-336791?style=flat-square&logo=postgresql&logoColor=white)
-![Redis](https://img.shields.io/badge/-Redis-DC382D?style=flat-square&logo=redis&logoColor=white)
-![OpenAI](https://img.shields.io/badge/-OpenAI-412991?style=flat-square&logo=openai&logoColor=white)
-![LangChain](https://img.shields.io/badge/-LangChain-121212?style=flat-square&logo=chainlink&logoColor=white)
+```env
+DATABASE_URL=postgresql://user:pass@host:5432/dbname
+JWT_SECRET_KEY=long-random-secret
 
-Specialization: RAG implementation, hybrid vector search, query optimization.
+BACKEND_URL=http://localhost:5000
+FRONTEND_URL=http://localhost:5173
 
-### Infrastructure and DevOps
+GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-xxxx
 
-![Docker](https://img.shields.io/badge/-Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
-![Celery](https://img.shields.io/badge/-Celery-37814A?style=flat-square&logo=celery&logoColor=white)
-![Linux](https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
-![Git](https://img.shields.io/badge/-Git-F05032?style=flat-square&logo=git&logoColor=white)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com
+SMTP_PASS=your-app-password
+SMTP_FROM=you@gmail.com
 
-Specialization: CI/CD pipelines, containerization, cloud infrastructure.
+SKIP_EMAIL_CONFIRMATION=true
+GMAIL_SYNC_LOOKBACK_DAYS=30
+```
 
-## Experience
+### `frontend/.env`
 
-### Nickelfox Technologies Pvt Ltd
+```env
+VITE_GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
+```
 
-Software Development Engineer (Internship: Nov 2024 - Feb 2025)  
-Feb 2025 - Present
+## Run Locally
 
-- Contributed to live applications serving 2,000+ users, integrated RAG to dynamically generate contextual questions from data, and fixed critical API issues.
-- Designed RESTful APIs with Django REST Framework and PostgreSQL connection pooling, improving query performance by 30% in high-traffic scenarios.
-- Implemented robust error handling, structured logging, and scalable Redis caching for production reliability.
-- Improved development throughput by using Claude skills, agents, and MCP-based workflows to automate repetitive engineering tasks.
-- Collaborated directly with clients and product stakeholders to refine requirements and deliver scalable backend solutions.
+### Backend
 
-### Signimus Technologies Pvt Ltd
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python seed.py      # first-time setup
+python app.py
+```
 
-Software Development Engineer Intern  
-Oct 2023 - Feb 2024
+Backend runs on `http://127.0.0.1:5000`.
 
-- Engineered a conversational AI application with OpenAI APIs, introducing caching and rate limiting to improve response quality by 80%.
-- Architected scalable backend systems with Python and Django on AWS EC2/RDS with load balancing for 200+ concurrent users.
-- Optimized throughput with Celery and Redis, reducing API response times by 50%.
-- Automated repetitive business workflows with Selenium, cutting manual work by 90%.
+### Frontend
 
-## Projects
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-### Play-Ground
+Frontend runs on `http://localhost:5173`.
 
-Mar 2024 - Jun 2024
+### Mobile
 
-- Built a full-stack e-commerce platform with Django backend, secure authentication, Stripe payments, and mobile-responsive UI.
-- Developed search and filtering APIs with indexing and QuerySet optimization for faster response times.
-- Added a dynamic product review system to improve user engagement.
-- Followed PEP8 and modular architecture for maintainable code.
+```bash
+cd mobile
+npm install
+npx expo start
+```
 
-Repository: https://github.com/omgupta2202/Play-ground
+Set `mobile/constants/api.ts` `API_BASE` to your backend URL.
 
-### CRM Application
+## Database Migrations
 
-Sep 2023 - Nov 2023
+Apply SQL migrations manually:
 
-- Designed a comprehensive CRM platform with custom middleware, DB signals, and scalable APIs.
-- Delivered a real-time analytics dashboard with aggregation APIs for lead conversion insights.
-- Integrated Sentry and PostHog for proactive debugging and product instrumentation.
-- Automated notifications with Django signals and email services, improving communication efficiency by 25%.
+```bash
+cd backend
+source venv/bin/activate
+python -c "
+from dotenv import load_dotenv; load_dotenv()
+import os, psycopg2
+conn = psycopg2.connect(os.environ['DATABASE_URL'])
+conn.autocommit = True
+cur = conn.cursor()
+cur.execute(open('migrations/ledger_architecture.sql').read())
+conn.close()
+print('Done')
+"
+```
 
-## Education
+If migrating existing legacy data:
 
-### KIET Group of Institutions, Ghaziabad
+```bash
+cd backend
+source venv/bin/activate
+python migrations/data_migration.py
+```
 
-B.Tech in Computer Science and Engineering  
-Apr 2021 - Apr 2025  
-CGPA: 7.56
+## API Notes
 
-### Maharishi Vidya Mandir (CBSE), Orai, Jalaun, U.P.
+All responses are wrapped as:
 
-Class 12, Higher Secondary School  
-Apr 2018 - Apr 2020  
-Percentage: 95%
+```json
+{ "data": <payload>, "error": <string|null> }
+```
 
-## Technical Skills
+All routes except `/api/auth/*` and `/api/gmail/callback` require:
 
-- Languages: Python, SQL, JavaScript, HTML/CSS
-- Frameworks and Libraries: Django, Django REST Framework, Flask, Celery, Redis
-- Tools and Platforms: Git, AWS (EC2, RDS, S3), Docker, Postman, Linux, Nginx
+```text
+Authorization: Bearer <jwt>
+```
 
-## Leadership
+## Route Groups
 
-### Core Member, FOSSC (Free and Open Source Community), KIET
+### New (ledger architecture)
+- `/api/financial-accounts`
+- `/api/ledger`
+- `/api/payments`
+- `/api/obligations`
+- `/api/billing-cycles`
+- `/api/smart-allocation`
+- `/api/dashboard`
+- `/api/daily-logs`
 
-Mar 2022 - Present
+### Legacy (kept for compatibility)
+- `/api/subscriptions`
+- `/api/emis`
+- `/api/cards`
+- `/api/accounts`
+- `/api/receivables`
+- `/api/capex`
+- `/api/rent`
+- `/api/snapshots`
 
-- Collaborated with peers in a community of 150+ members.
-- Mentored 10+ junior developers and improved coding best practices.
+## Gmail Sync
 
-## Contact
+1. Open web app → Profile → Connect Gmail
+2. Complete OAuth flow
+3. Click Sync to process emails
 
-- Phone: +91 72756 76734
-- Email: omgupta.se@gmail.com
-- Portfolio: http://omgupta2202.pythonanywhere.com/
-- GitHub: https://github.com/omgupta2202
-- LinkedIn: Add your LinkedIn profile URL
-- LeetCode: Add your LeetCode profile URL
+## Build
+
+### Frontend production build
+
+```bash
+cd frontend
+npm run build
+```
+
+### Netlify deployment
+
+The frontend can be deployed to Netlify as a static site. The backend still needs a separate host.
+
+Set these environment variables in Netlify:
+
+```env
+VITE_GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
+VITE_API_BASE=https://your-backend.example.com/api
+```
+
+Set these on the backend host:
+
+```env
+FRONTEND_URL=https://your-site.netlify.app
+CORS_ORIGINS=https://your-site.netlify.app
+BACKEND_URL=https://your-backend.example.com
+```
+
+### Mobile APK (EAS)
+
+```bash
+npm install -g eas-cli
+eas login
+cd mobile
+eas build --platform android --profile preview
+```
+
+## Google Cloud Setup
+
+1. Create project in Google Cloud Console
+2. Enable Gmail API
+3. Create OAuth 2.0 Web client
+4. Add redirect URI: `http://localhost:5000/api/gmail/callback`
+5. Set client ID/secret in env files

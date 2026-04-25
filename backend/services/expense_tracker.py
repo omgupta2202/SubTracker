@@ -1,10 +1,15 @@
 """
-Trip expense tracker — shared ledger for groups with email invites.
+Expense Tracker — shared ledger for groups with email invites.
 
-Key abstraction: a trip's expenses are tracked entirely in `trip_*` tables,
-NOT in the user's personal ledger. This keeps trip activity from polluting
-the dashboard's monthly burn while still letting the user record real
-payments separately if they want.
+Was originally "Trips"; rebranded to "Expense Tracker" because the same
+machinery handles trips, daily ongoing expenses with roommates, recurring
+dinner clubs, etc. — anything with a fixed set of members splitting costs.
+DB schema retains `trip_*` table names for stability.
+
+Key abstraction: a tracker's expenses live entirely in `trip_*` tables,
+NOT in the user's personal ledger. This keeps tracker activity from
+polluting the dashboard's monthly burn while still letting the user record
+real payments separately if they want.
 
 Settlement uses greedy debt simplification:
   - Compute net balance per member (paid − owed).
@@ -48,18 +53,109 @@ def create_trip(creator_id: str, name: str, *, start_date=None, end_date=None,
 
 
 def list_trips_for_user(user_id: str) -> List[dict]:
-    """Return trips where the user is creator OR a joined member."""
-    return fetchall(
+    """Return trips where the user is creator OR a joined member, enriched
+    with at-a-glance summary fields so the list view doesn't need a per-row
+    detail fetch.
+
+    Each row includes: total_spent, members_count, expenses_count, and
+    my_balance (the net for *this* user, NULL if they're not a member).
+    """
+    rows = fetchall(
         """
-        SELECT DISTINCT t.*
+        WITH my_trips AS (
+            SELECT DISTINCT t.id
+            FROM trips t
+            LEFT JOIN trip_members tm ON tm.trip_id = t.id
+            WHERE t.creator_id = %(uid)s
+               OR tm.user_id   = %(uid)s
+        ),
+        my_member AS (
+            SELECT trip_id, id AS member_id
+            FROM trip_members
+            WHERE user_id = %(uid)s
+              OR (invite_status='creator' AND user_id IS NULL
+                  AND email = (SELECT email FROM users WHERE id=%(uid)s))
+        ),
+        sums AS (
+            SELECT trip_id,
+                   COUNT(*) AS expenses_count,
+                   COALESCE(SUM(amount), 0) AS total_spent
+            FROM trip_expenses
+            WHERE trip_id IN (SELECT id FROM my_trips)
+            GROUP BY trip_id
+        ),
+        member_counts AS (
+            SELECT trip_id, COUNT(*) AS members_count
+            FROM trip_members
+            WHERE trip_id IN (SELECT id FROM my_trips)
+            GROUP BY trip_id
+        ),
+        my_paid AS (
+            SELECT e.trip_id,
+                   COALESCE(SUM(
+                     CASE
+                       WHEN EXISTS (SELECT 1 FROM trip_expense_payments p WHERE p.expense_id = e.id)
+                         THEN COALESCE((SELECT SUM(p.amount)
+                                          FROM trip_expense_payments p
+                                          JOIN my_member mm ON mm.member_id = p.member_id
+                                         WHERE p.expense_id = e.id), 0)
+                       WHEN e.payer_id IN (SELECT member_id FROM my_member)
+                         THEN e.amount
+                       ELSE 0
+                     END
+                   ), 0) AS paid
+            FROM trip_expenses e
+            WHERE e.trip_id IN (SELECT id FROM my_trips)
+            GROUP BY e.trip_id
+        ),
+        my_share AS (
+            SELECT e.trip_id,
+                   COALESCE(SUM(s.share), 0) AS share
+            FROM trip_expenses e
+            JOIN trip_expense_splits s ON s.expense_id = e.id
+            JOIN my_member mm           ON mm.member_id = s.member_id
+            WHERE e.trip_id IN (SELECT id FROM my_trips)
+            GROUP BY e.trip_id
+        )
+        SELECT t.*,
+               COALESCE(s.expenses_count, 0)   AS expenses_count,
+               COALESCE(s.total_spent, 0)      AS total_spent,
+               COALESCE(mc.members_count, 0)   AS members_count,
+               (COALESCE(mp.paid, 0) - COALESCE(ms.share, 0)) AS my_balance
         FROM trips t
-        LEFT JOIN trip_members tm ON tm.trip_id = t.id
-        WHERE t.creator_id = %s
-           OR tm.user_id = %s
+        JOIN my_trips x      ON x.id = t.id
+        LEFT JOIN sums s          ON s.trip_id = t.id
+        LEFT JOIN member_counts mc ON mc.trip_id = t.id
+        LEFT JOIN my_paid mp      ON mp.trip_id = t.id
+        LEFT JOIN my_share ms     ON ms.trip_id = t.id
         ORDER BY t.created_at DESC
         """,
-        (user_id, user_id),
+        {"uid": user_id},
     )
+    for r in rows:
+        # Round computed numbers so JSON rendering is stable.
+        for k in ("total_spent", "my_balance"):
+            if r.get(k) is not None:
+                r[k] = float(r[k])
+    return rows
+
+
+def delete_trip(trip_id: str, user_id: str) -> bool:
+    """Hard-delete a trip and all child rows. Creator only.
+
+    Cascade is handled by ON DELETE CASCADE on the FKs from
+    trip_members / trip_expenses / trip_expense_splits / trip_expense_payments
+    back to trips/expenses. If a constraint blocks (older schema), bail and
+    let the route surface the DB error.
+    """
+    if not _is_creator(trip_id, user_id):
+        return False
+    execute_void("DELETE FROM trip_expense_payments WHERE expense_id IN (SELECT id FROM trip_expenses WHERE trip_id=%s)", (trip_id,))
+    execute_void("DELETE FROM trip_expense_splits   WHERE expense_id IN (SELECT id FROM trip_expenses WHERE trip_id=%s)", (trip_id,))
+    execute_void("DELETE FROM trip_expenses WHERE trip_id=%s", (trip_id,))
+    execute_void("DELETE FROM trip_members  WHERE trip_id=%s", (trip_id,))
+    execute_void("DELETE FROM trips         WHERE id=%s",      (trip_id,))
+    return True
 
 
 def get_trip(trip_id: str, user_id: Optional[str]) -> Optional[dict]:
@@ -340,15 +436,54 @@ def add_expense(
 
 
 def update_expense(expense_id: str, fields: Dict[str, Any]) -> Optional[dict]:
-    """Editable fields: description, amount, expense_date, note, splits."""
-    allowed = {"description", "amount", "expense_date", "note"}
+    """Editable: description, amount, expense_date, note, split_kind, splits, payments.
+
+    When `payments` is provided, the row's primary payer_id is rewritten to
+    the largest contributor (matches add_expense behaviour) so legacy
+    single-payer queries stay coherent. When `splits` is provided, the
+    splits table is rewritten wholesale.
+    """
+    allowed = {"description", "amount", "expense_date", "note", "split_kind"}
     field_set = {k: v for k, v in fields.items() if k in allowed}
+
+    payments = fields.get("payments")
+    if payments is not None:
+        norm = [
+            {"member_id": p["member_id"], "amount": Decimal(str(p["amount"]))}
+            for p in payments if Decimal(str(p.get("amount") or 0)) > 0
+        ]
+        if not norm:
+            raise ValueError("at least one payer must contribute > 0")
+        # Drift-check against amount if amount is being updated, else against
+        # the row's stored amount.
+        amt_target = Decimal(str(fields["amount"])) if "amount" in fields else None
+        if amt_target is None:
+            existing = fetchone("SELECT amount FROM trip_expenses WHERE id=%s", (expense_id,))
+            amt_target = Decimal(str(existing["amount"])) if existing else None
+        if amt_target is not None:
+            total = sum((p["amount"] for p in norm), Decimal("0"))
+            if abs(total - amt_target) > Decimal("0.50"):
+                raise ValueError(f"payments total {total} doesn't match amount {amt_target}")
+        primary = max(norm, key=lambda p: p["amount"])
+        field_set["payer_id"] = primary["member_id"]
+
     if field_set:
         set_clause = ", ".join(f"{k}=%s" for k in field_set)
         execute_void(
             f"UPDATE trip_expenses SET {set_clause}, updated_at=NOW() WHERE id=%s",
             list(field_set.values()) + [expense_id],
         )
+
+    if payments is not None:
+        execute_void("DELETE FROM trip_expense_payments WHERE expense_id=%s", (expense_id,))
+        for p in [{"member_id": x["member_id"], "amount": x["amount"]} for x in
+                  [{"member_id": p["member_id"], "amount": Decimal(str(p["amount"]))}
+                   for p in payments if Decimal(str(p.get("amount") or 0)) > 0]]:
+            execute_void(
+                "INSERT INTO trip_expense_payments (expense_id, member_id, amount) VALUES (%s, %s, %s)",
+                (expense_id, p["member_id"], p["amount"]),
+            )
+
     if "splits" in fields and fields["splits"] is not None:
         execute_void("DELETE FROM trip_expense_splits WHERE expense_id=%s", (expense_id,))
         for s in fields["splits"]:

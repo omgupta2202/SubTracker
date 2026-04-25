@@ -1,5 +1,5 @@
 /**
- * Dashboard layout store — persisted in localStorage.
+ * Dashboard layout store — persisted in localStorage, scoped per user.
  *
  * State:
  *   columns: which column each card lives in (3 columns on desktop).
@@ -7,9 +7,17 @@
  *
  * The card order within each column is the array order; reordering is just
  * splicing within / between these arrays.
+ *
+ * Why per-user: a shared device used by multiple SubTracker accounts would
+ * otherwise stomp on each other's hide/show + reorder state every login.
  */
 
-const KEY = "subtracker:dashboard-layout:v2";
+const KEY_PREFIX = "subtracker:dashboard-layout:v3";
+const LEGACY_KEY = "subtracker:dashboard-layout:v2";
+
+function keyFor(userId?: string | null): string {
+  return userId ? `${KEY_PREFIX}:${userId}` : KEY_PREFIX;
+}
 
 export type CardId =
   | "net-worth"
@@ -47,10 +55,22 @@ const DEFAULT_LAYOUT: Layout = {
   hidden: [],
 };
 
-/** Healing read — guarantees every CardId appears exactly once across columns or hidden. */
-export function loadLayout(): Layout {
+/** Healing read — guarantees every CardId appears exactly once across columns or hidden.
+ *  Pass `userId` to scope the layout per account. If a user-scoped key is
+ *  missing but the legacy v2 key exists, we migrate it on first load. */
+export function loadLayout(userId?: string | null): Layout {
   try {
-    const raw = localStorage.getItem(KEY);
+    const k = keyFor(userId);
+    let raw = localStorage.getItem(k);
+    if (!raw && userId) {
+      // First load on this account — migrate the previous shared layout
+      // (if any) so existing users don't lose their tweaks.
+      const legacy = localStorage.getItem(LEGACY_KEY);
+      if (legacy) {
+        localStorage.setItem(k, legacy);
+        raw = legacy;
+      }
+    }
     if (!raw) return clone(DEFAULT_LAYOUT);
     const parsed = JSON.parse(raw) as Partial<Layout>;
     return reconcile(parsed);
@@ -59,8 +79,8 @@ export function loadLayout(): Layout {
   }
 }
 
-export function saveLayout(layout: Layout) {
-  localStorage.setItem(KEY, JSON.stringify(layout));
+export function saveLayout(layout: Layout, userId?: string | null) {
+  localStorage.setItem(keyFor(userId), JSON.stringify(layout));
 }
 
 function clone<T>(v: T): T { return JSON.parse(JSON.stringify(v)); }
