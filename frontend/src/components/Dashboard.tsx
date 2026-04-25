@@ -37,6 +37,7 @@ import { CashFlowCard } from "./CashFlowCard";
 import { CapExCard } from "./CapExCard";
 import { ReceivablesCard } from "./ReceivablesCard";
 import { CardDetailDrawer } from "./CardDetailDrawer";
+import { AppsLauncher } from "./AppsLauncher";
 import { HistoryPanel } from "./HistoryPanel";
 import { DashboardFilterBar, loadFilters, isFilterActive } from "./DashboardFilterBar";
 import { AttentionSection } from "./AttentionSection";
@@ -244,6 +245,8 @@ export function Dashboard() {
             <IconBtn onClick={() => setHistoryOpen(true)} title="History">
               <History size={16} />
             </IconBtn>
+
+            <AppsLauncher />
 
             <button
               onClick={() => setPaletteOpen(true)}

@@ -322,6 +322,141 @@ export const snoozeAttention = (item_key: string, days: number = 3) =>
     { method: "POST", body: JSON.stringify({ item_key, days }) },
   );
 
+// ── Trips ─────────────────────────────────────────────────────────────────
+export interface TripSummary {
+  id: string;
+  creator_id: string;
+  name: string;
+  start_date: string | null;
+  end_date: string | null;
+  currency: string;
+  status: "active" | "settled" | "archived";
+  note: string | null;
+  created_at: string;
+}
+export interface TripMember {
+  id: string;
+  trip_id: string;
+  email: string;
+  display_name: string;
+  user_id: string | null;
+  invite_status: "pending" | "joined" | "creator";
+  invite_token: string | null;
+  upi_id: string | null;
+  invited_at: string;
+  joined_at: string | null;
+}
+export interface TripExpenseSplit {
+  member_id: string;
+  share: number;
+}
+/** Multi-payer support — who put in money for this expense. Sum equals amount. */
+export interface TripExpensePayment {
+  member_id: string;
+  amount: number;
+}
+export interface TripExpense {
+  id: string;
+  trip_id: string;
+  payer_id: string;          // primary/largest payer (legacy single-payer column)
+  description: string;
+  amount: number;
+  currency: string;
+  expense_date: string;
+  split_kind: "equal" | "custom";
+  note: string | null;
+  created_at: string;
+  splits: TripExpenseSplit[];
+  payments: TripExpensePayment[];
+}
+export interface TripBalance {
+  member_id: string;
+  display_name: string;
+  paid: number;
+  owed: number;
+  net: number;
+}
+export interface TripDetail extends TripSummary {
+  members: TripMember[];
+  expenses: TripExpense[];
+  balances: TripBalance[];
+}
+export interface TripTransfer {
+  from_member_id: string;
+  from_display_name: string;
+  to_member_id: string;
+  to_display_name: string;
+  to_upi_id: string | null;
+  amount: number;
+}
+export interface TripSettlement {
+  balances: TripBalance[];
+  transfers: TripTransfer[];
+}
+
+export const listTrips     = ()        => request<TripSummary[]>("/trips/");
+export const createTrip    = (d: { name: string; start_date?: string; end_date?: string; note?: string }) =>
+  request<TripDetail>("/trips/", { method: "POST", body: JSON.stringify(d) });
+export const getTrip       = (id: string) => request<TripDetail>(`/trips/${id}`);
+export const updateTrip    = (id: string, d: Partial<Pick<TripSummary, "name" | "start_date" | "end_date" | "note" | "status">>) =>
+  request<TripDetail>(`/trips/${id}`, { method: "PUT", body: JSON.stringify(d) });
+export const inviteTripMember = (id: string, d: { email: string; display_name: string }) =>
+  request<TripMember>(`/trips/${id}/members`, { method: "POST", body: JSON.stringify(d) });
+export const removeTripMember = (id: string, memberId: string) =>
+  request<{ deleted: boolean }>(`/trips/${id}/members/${memberId}`, { method: "DELETE" });
+export const resendTripInvite = (id: string, memberId: string) =>
+  request<TripMember>(`/trips/${id}/members/${memberId}/resend-invite`, { method: "POST" });
+export const addTripExpense = (
+  id: string,
+  d: {
+    payer_id: string;
+    description: string;
+    amount: number;
+    expense_date?: string;
+    split_kind?: "equal" | "custom";
+    splits?: TripExpenseSplit[];
+    /** When provided, expense is multi-payer; sum must equal amount. */
+    payments?: TripExpensePayment[];
+    note?: string;
+  },
+) => request<TripExpense>(`/trips/${id}/expenses`, { method: "POST", body: JSON.stringify(d) });
+export const deleteTripExpense = (id: string, eid: string) =>
+  request<{ deleted: boolean }>(`/trips/${id}/expenses/${eid}`, { method: "DELETE" });
+export const getTripSettlement = (id: string) =>
+  request<TripSettlement>(`/trips/${id}/settlement`);
+
+/** Guest endpoints — no JWT, the token IS auth. */
+async function guestRequest<T>(path: string, options?: RequestInit): Promise<T> {
+  const BASE = (import.meta as any).env?.VITE_API_BASE ?? "/api";
+  const res = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options?.headers as Record<string, string> | undefined),
+    },
+  });
+  const json = await res.json() as { data: T | null; error: string | null };
+  if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
+  return json.data as T;
+}
+export const guestGetTrip = (token: string) =>
+  guestRequest<TripDetail & { me: TripMember }>(`/trips/guest/${token}`);
+export const guestAddTripExpense = (
+  token: string,
+  d: {
+    payer_id?: string;
+    description: string;
+    amount: number;
+    expense_date?: string;
+    split_kind?: "equal" | "custom";
+    splits?: TripExpenseSplit[];
+    payments?: TripExpensePayment[];
+    note?: string;
+  },
+) => guestRequest<TripExpense>(`/trips/guest/${token}/expenses`, { method: "POST", body: JSON.stringify(d) });
+export const guestUpdateMe = (token: string, d: { display_name?: string; upi_id?: string }) =>
+  guestRequest<TripMember>(`/trips/guest/${token}/me`, { method: "PATCH", body: JSON.stringify(d) });
+
 // ── Obligations (Unified: subscriptions + EMIs + rent) ────────────────────
 export const getObligations = (type?: "subscription" | "emi" | "rent" | "insurance" | "sip" | "utility" | "other") => {
   const p = type ? `?type=${type}` : "";

@@ -28,6 +28,7 @@ Route layout:
     /api/gmail              Gmail OAuth + staged sync pipeline
 """
 import os
+from datetime import timedelta
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask import g
@@ -56,6 +57,7 @@ from routes.daily_logs         import bp as daily_logs_bp
 from routes.dashboard          import bp as dashboard_bp
 from routes.reminders          import bp as reminders_bp
 from routes.reminder_actions   import bp as reminder_actions_bp
+from routes.trips              import bp as trips_bp, guest_bp as trips_guest_bp
 
 # ── Modules ───────────────────────────────────────────────────────────────────
 from modules.auth  import bp as auth_bp
@@ -78,6 +80,12 @@ def create_app() -> Flask:
     CORS(app, origins=sorted(set(allowed_origins)))
 
     app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "change-me-in-production")
+    # Default access token lifetime is 30 days — flask-jwt-extended's stock
+    # 15-minute default is far too aggressive for a personal-finance app
+    # where re-authentication friction is high and the threat model is "my
+    # own laptop", not "shared kiosk". Override via JWT_ACCESS_TOKEN_DAYS.
+    access_days = int(os.environ.get("JWT_ACCESS_TOKEN_DAYS", "30"))
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=access_days)
     JWTManager(app)
 
     for bp in (
@@ -102,6 +110,8 @@ def create_app() -> Flask:
         dashboard_bp,
         reminders_bp,
         reminder_actions_bp,
+        trips_bp,
+        trips_guest_bp,
         # Modules
         auth_bp,
         gmail_bp,
@@ -133,6 +143,9 @@ def create_app() -> Flask:
             return
         # Email action buttons authenticate via the magic-link token in the URL
         if request.path.startswith("/api/reminders/action/"):
+            return
+        # Trip guests authenticate via their invite_token in the URL
+        if request.path.startswith("/api/trips/guest/"):
             return
         try:
             verify_jwt_in_request()

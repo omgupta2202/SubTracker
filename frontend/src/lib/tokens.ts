@@ -120,3 +120,27 @@ export function relativeDay(daysAway: number): string {
   if (daysAway > 0)         return `in ${daysAway}d`;
   return `${Math.abs(daysAway)}d ago`;
 }
+
+/** "32s ago", "5m ago", "3h ago", "2d ago", "Mar 14" — for past timestamps. */
+export function relativeTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "—";
+  const sec = Math.max(1, Math.floor((Date.now() - t) / 1000));
+  if (sec < 60)      return `${sec}s ago`;
+  if (sec < 3600)    return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400)   return `${Math.floor(sec / 3600)}h ago`;
+  if (sec < 604800)  return `${Math.floor(sec / 86400)}d ago`;
+  return new Date(iso).toLocaleDateString("en-IN", { month: "short", day: "numeric" });
+}
+
+/** "14 Mar 2026, 3:42 pm" — full local timestamp for tooltips. */
+export function fullTimestamp(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("en-IN", {
+    day: "numeric", month: "short", year: "numeric",
+    hour: "numeric", minute: "2-digit",
+  });
+}
