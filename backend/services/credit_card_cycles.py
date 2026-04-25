@@ -8,10 +8,13 @@ Enforces:
 """
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 from typing import Optional
 
 from db import fetchone, fetchall, execute, execute_void
+
+log = logging.getLogger(__name__)
 
 
 def ensure_entry_cycle_link(
@@ -150,7 +153,7 @@ def recalculate_cycle_totals(cycle_id: str, user_id: str):
         (cycle_id,),
     )
     total_billed = float(total["total"] if total else 0)
-    minimum_due = round(total_billed * 0.05, 2)
+    minimum_due = compute_minimum_due(cycle_id, total_billed)
 
     execute_void(
         """
@@ -162,6 +165,39 @@ def recalculate_cycle_totals(cycle_id: str, user_id: str):
         """,
         (total_billed, minimum_due, cycle_id, user_id),
     )
+
+
+# Issuer-aware minimum-due fallback when account_cc_ext is missing the override.
+DEFAULT_MIN_DUE_PCT = 0.05
+DEFAULT_MIN_DUE_FLOOR = 100.0
+
+
+def compute_minimum_due(cycle_id: str, total_billed: float) -> float:
+    """
+    Per-card minimum-due rule.
+
+    Reads minimum_due_pct and minimum_due_floor from account_cc_ext
+    (added in migrations/add_min_due_config_to_cc_ext.sql); falls back
+    to 5% / ₹100 floor if the columns are not present yet.
+    """
+    if total_billed <= 0:
+        return 0.0
+    cfg = fetchone(
+        """
+        SELECT
+          COALESCE(ext.minimum_due_pct,   %s) AS pct,
+          COALESCE(ext.minimum_due_floor, %s) AS floor
+        FROM billing_cycles bc
+        JOIN account_cc_ext ext ON ext.account_id = bc.account_id
+        WHERE bc.id=%s
+        """,
+        (DEFAULT_MIN_DUE_PCT, DEFAULT_MIN_DUE_FLOOR, cycle_id),
+    ) or {}
+    pct = float(cfg.get("pct") or DEFAULT_MIN_DUE_PCT)
+    floor = float(cfg.get("floor") or DEFAULT_MIN_DUE_FLOOR)
+    pct_amount = total_billed * pct
+    # User pays max(floor, percentage), but never more than the bill itself.
+    return round(min(total_billed, max(floor, pct_amount)), 2)
 
 
 def _create_cycle_for_txn_date(
@@ -207,16 +243,25 @@ def _statement_date_for_txn(txn_date: date, closing_day: int) -> date:
 
 
 def _date_with_day(year: int, month: int, day: int) -> date:
-    # clamp to month end
+    """
+    Clamp a configured day-of-month to the actual month length.
+    e.g. due_day=31 in April becomes April 30; in February (non-leap), Feb 28.
+    Logs whenever a clamp happens so the user-visible due date is auditable.
+    """
     if month == 12:
         nxt = date(year + 1, 1, 1)
     else:
         nxt = date(year, month + 1, 1)
     last = (nxt - timedelta(days=1)).day
+    if day > last:
+        log.info(
+            "CC date clamp: configured day=%s exceeds %d-%02d length=%d; using %d",
+            day, year, month, last, last,
+        )
     return date(year, month, min(day, last))
 
 
-def _next_month(year: int, month: int) -> tuple[int, int]:
+def _next_month(year: int, month: int) -> "tuple[int, int]":
     if month == 12:
         return year + 1, 1
     return year, month + 1

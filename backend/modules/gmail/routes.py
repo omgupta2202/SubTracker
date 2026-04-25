@@ -112,3 +112,28 @@ def disconnect():
         return ok({"disconnected": True})
     except GmailError as e:
         return err(str(e), e.status)
+
+
+@bp.get("/recurring-suggestions")
+@jwt_required()
+def recurring_suggestions():
+    """
+    Surface merchants that look recurring (same name + amount, regular
+    cadence) so the user can convert them into a tracked subscription.
+    Failures are logged but never bubble up as 500s — recurring suggestions
+    are a non-critical helper, missing data should not break the dashboard.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    from services.recurring_detector import find_recurring_candidates
+    try:
+        lookback = min(int(request.args.get("lookback_days", 180)), 365)
+        min_occ  = max(int(request.args.get("min_occurrences", 2)), 2)
+        return ok(find_recurring_candidates(
+            get_jwt_identity(),
+            lookback_days=lookback,
+            min_occurrences=min_occ,
+        ))
+    except Exception as exc:
+        log.warning("recurring_suggestions failed: %s", exc, exc_info=True)
+        return ok([])

@@ -1,5 +1,22 @@
-import { useState, useCallback, useEffect, useRef } from "react";
-import { Settings, PlusCircle, History, LogOut, BellRing, SlidersHorizontal } from "lucide-react";
+import { useState } from "react";
+import { Eye } from "lucide-react";
+import {
+  DndContext, PointerSensor, KeyboardSensor, useSensor, useSensors,
+  closestCorners, DragOverlay, useDroppable, type DragEndEvent, type DragOverEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { SortableCard } from "@/components/ui/SortableCard";
+import {
+  ALL_CARDS, type CardId, type ColumnId,
+  loadLayout, saveLayout, hideCard, restoreCard, moveCard,
+  findColumn, isColumnId,
+} from "@/lib/layoutStore";
+import {
+  History, BellRing, SlidersHorizontal,
+  Plus, LogOut, Search, User as UserIcon, ChevronDown,
+} from "lucide-react";
 import { useAuth } from "@/modules/auth";
 import { useSubscriptions } from "@/hooks/useSubscriptions";
 import { useEmis } from "@/hooks/useEmis";
@@ -11,20 +28,20 @@ import { useRent } from "@/hooks/useRent";
 import { useSmartAllocation } from "@/hooks/useSmartAllocation";
 import { useDashboard } from "@/hooks/useDashboard";
 import { usePeriodSummary } from "@/hooks/useFilteredCCTotal";
-import { loadLayout, saveLayout, setCardWidth, setRowHeight, getRowHeights } from "@/store/layoutStore";
-import type { CardConfig, DashboardFilters } from "@/types";
+import type { DashboardFilters } from "@/types";
 import { MonthlyBurnCard } from "./MonthlyBurnCard";
 import { SevenDayHorizonCard } from "./SevenDayHorizonCard";
 import { EmiProgressCard } from "./EmiProgressCard";
 import { NetWorthCard } from "./NetWorthCard";
 import { CashFlowCard } from "./CashFlowCard";
 import { CapExCard } from "./CapExCard";
-import { CrudDrawer } from "./CrudDrawer";
+import { ReceivablesCard } from "./ReceivablesCard";
 import { HistoryPanel } from "./HistoryPanel";
-import { LayoutConfigurator } from "./LayoutConfigurator";
-import { ResizableGrid } from "./ResizableGrid";
 import { DashboardFilterBar, loadFilters, isFilterActive } from "./DashboardFilterBar";
 import { AttentionSection } from "./AttentionSection";
+import { RecurringSuggestionsStrip } from "./RecurringSuggestionsStrip";
+import { CommandPalette } from "./CommandPalette";
+import { cn } from "@/lib/utils";
 
 export function Dashboard() {
   const { logout, user } = useAuth();
@@ -38,30 +55,47 @@ export function Dashboard() {
   const { data: allocation, refetch: rAlloc } = useSmartAllocation();
   const { summary: dashSummary, loading: lDash, refetch: rDash } = useDashboard();
 
-  const [layout, setLayout] = useState<CardConfig[]>(() => {
-    const stored = loadLayout();
-    if (!stored.find(c => c.id === "capex")) {
-      localStorage.removeItem("subtracker-layout");
-      return loadLayout();
-    }
-    return stored;
-  });
-
-  const [drawerOpen, setDrawerOpen]   = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [configOpen, setConfigOpen]   = useState(false);
-  const [drawerTab, setDrawerTab]     = useState<CardConfig["id"] | undefined>();
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [filters, setFilters] = useState<DashboardFilters>(loadFilters);
   const [attentionOpen, setAttentionOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
-  const headerRef = useRef<HTMLDivElement | null>(null);
-  const attentionRef = useRef<HTMLDivElement | null>(null);
-  const filterRef = useRef<HTMLDivElement | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [layout, setLayout] = useState(loadLayout);
+  const [activeDragId, setActiveDragId] = useState<CardId | null>(null);
 
-  const openDrawer = (tab?: string) => {
-    setDrawerTab(tab as any);
-    setDrawerOpen(true);
-  };
+  function commitLayout(next: typeof layout) {
+    setLayout(next);
+    saveLayout(next);
+  }
+  function hide(id: CardId)    { commitLayout(hideCard(layout, id));    }
+  function restore(id: CardId) { commitLayout(restoreCard(layout, id)); }
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  function handleDragOver(ev: DragOverEvent) {
+    const activeId = ev.active.id as CardId;
+    const overId   = ev.over?.id as CardId | ColumnId | undefined;
+    if (!overId || activeId === overId) return;
+
+    const fromCol = findColumn(layout, activeId);
+    const toCol   = isColumnId(overId) ? overId : findColumn(layout, overId);
+    if (!fromCol || !toCol || fromCol === toCol) return;
+
+    // Cross-column move during drag — gives live visual feedback
+    commitLayout(moveCard(layout, activeId, overId));
+  }
+  function handleDragEnd(ev: DragEndEvent) {
+    setActiveDragId(null);
+    const activeId = ev.active.id as CardId;
+    const overId   = ev.over?.id as CardId | ColumnId | undefined;
+    if (!overId || activeId === overId) return;
+    commitLayout(moveCard(layout, activeId, overId));
+  }
+
   const filterActive = isFilterActive(filters);
   const { summary: periodSummary, loading: periodLoading } = usePeriodSummary(filters, filterActive);
 
@@ -71,212 +105,381 @@ export function Dashboard() {
     void rRent(); void rAlloc(); void rDash();
   }
 
-  const handleWidthChange = useCallback((id: string, pct: number) => {
-    setLayout(prev => {
-      const next = setCardWidth(prev, id, pct);
-      saveLayout(next);
-      return next;
-    });
-  }, []);
+  function closeAllPopovers() {
+    setAttentionOpen(false);
+    setFilterOpen(false);
+    setProfileOpen(false);
+  }
+  const anyPopoverOpen = attentionOpen || filterOpen || profileOpen;
 
-  const handleRowHeightChange = useCallback((rowIndex: number, px: number) => {
-    setLayout(prev => {
-      const next = setRowHeight(prev, rowIndex, px, 3);
-      saveLayout(next);
-      return next;
-    });
-  }, []);
+  const monthLabel = new Date().toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+  const attentionCount = dashSummary?.attention_items?.length ?? 0;
 
-  const sorted = [...layout]
-    .sort((a, b) => a.order - b.order)
-    .filter(c => c.visible);
-
-  const cardMap: Record<string, React.ReactNode> = {
-    "net-worth":    <NetWorthCard
-                      accounts={dashSummary?.accounts ?? accounts}
-                      cards={dashSummary?.credit_cards ?? cards.map(c => ({ id: c.id, name: c.name, last4: c.last4, outstanding: c.outstanding, minimum_due: c.minimum_due }))}
-                      rent={rent.amount}
-                      onRefetch={refetchAll}
-                      onManageAccounts={() => openDrawer("accounts")}
-                    />,
-    "cash-flow":    <CashFlowCard
-                      dashboardSummary={dashSummary}
-                      dashboardLoading={lDash}
-                      allocation={allocation}
-                      periodSummary={filterActive ? periodSummary : null}
-                      periodLoading={filterActive ? periodLoading : false}
-                    />,
-    "capex":        <CapExCard items={capex} availableAfterCC={dashSummary?.net_after_cc ?? allocation?.summary.net_after_cc ?? 0} onRefetch={refetchAll} />,
-    "monthly-burn": <MonthlyBurnCard subscriptions={subscriptions} emis={emis} cards={cards} monthlyBurn={dashSummary?.monthly_burn} monthlyBurnTrendPct={dashSummary?.monthly_burn_trend_pct ?? null} onRefetch={refetchAll} />,
-    "seven-day":    <SevenDayHorizonCard upcomingDues={dashSummary?.upcoming_dues_7d} subscriptions={subscriptions} emis={emis} cards={cards} />,
-    "emi-progress": <EmiProgressCard emis={emis} onRefetch={refetchAll} />,
-  };
-
-  const slots = sorted.map(c => ({
-    id: c.id,
-    widthPct: c.widthPct ?? 0,
-    node: cardMap[c.id],
-  }));
-
-  useEffect(() => {
-    function onDocMouseDown(ev: MouseEvent) {
-      const target = ev.target as Node;
-      if (
-        attentionOpen &&
-        attentionRef.current &&
-        !attentionRef.current.contains(target)
-      ) {
-        setAttentionOpen(false);
-      }
-      if (
-        filterOpen &&
-        filterRef.current &&
-        !filterRef.current.contains(target)
-      ) {
-        setFilterOpen(false);
-      }
+  /** Render a card by id — single source of truth so column ordering can be
+      driven entirely from the layout state. Used by both the live grid and
+      the drag overlay preview. */
+  function renderCard(id: CardId) {
+    switch (id) {
+      case "net-worth":
+        return (
+          <NetWorthCard
+            accounts={dashSummary?.accounts ?? accounts}
+            cards={dashSummary?.credit_cards ?? cards.map(c => ({
+              id: c.id, name: c.name, last4: c.last4,
+              outstanding: c.outstanding, minimum_due: c.minimum_due,
+            }))}
+            rent={rent.amount}
+            rentDueDay={rent.due_day}
+            onRefetch={refetchAll}
+            onHide={() => hide("net-worth")}
+          />
+        );
+      case "cash-flow":
+        return (
+          <CashFlowCard
+            dashboardSummary={dashSummary}
+            dashboardLoading={lDash}
+            allocation={allocation}
+            periodSummary={filterActive ? periodSummary : null}
+            periodLoading={filterActive ? periodLoading : false}
+            onHide={() => hide("cash-flow")}
+          />
+        );
+      case "seven-day":
+        return (
+          <SevenDayHorizonCard
+            upcomingDues={dashSummary?.upcoming_dues_7d}
+            subscriptions={subscriptions}
+            emis={emis}
+            cards={cards}
+            onHide={() => hide("seven-day")}
+          />
+        );
+      case "monthly-burn":
+        return (
+          <MonthlyBurnCard
+            subscriptions={subscriptions}
+            emis={emis}
+            cards={cards}
+            monthlyBurn={dashSummary?.monthly_burn}
+            monthlyBurnBaseline={dashSummary?.monthly_burn_baseline}
+            monthlyBurnProjected={dashSummary?.monthly_burn_projected}
+            monthlyBurnTrendPct={dashSummary?.monthly_burn_trend_pct ?? null}
+            onRefetch={refetchAll}
+            onHide={() => hide("monthly-burn")}
+          />
+        );
+      case "emi-progress":
+        return <EmiProgressCard emis={emis} onRefetch={refetchAll} onHide={() => hide("emi-progress")} />;
+      case "capex":
+        return (
+          <CapExCard
+            items={capex}
+            availableAfterCC={dashSummary?.net_after_cc ?? allocation?.summary.net_after_cc ?? 0}
+            onRefetch={refetchAll}
+            onHide={() => hide("capex")}
+          />
+        );
+      case "receivables":
+        return <ReceivablesCard receivables={receivables} onRefetch={refetchAll} onHide={() => hide("receivables")} />;
     }
-    document.addEventListener("mousedown", onDocMouseDown);
-    return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [attentionOpen, filterOpen]);
+  }
 
   return (
-    <div className="min-h-screen bg-zinc-950 p-6">
+    <div className="min-h-screen bg-zinc-950">
       {/* Header */}
-      <div ref={headerRef} className="relative flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-zinc-100 tracking-tight">SubTracker</h1>
-          <p className="text-sm text-zinc-500 mt-0.5">Financial dashboard · {new Date().toLocaleDateString("en-IN", { month: "long", year: "numeric" })}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          {user && (
-            <div 
-              className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-zinc-800/50 cursor-pointer transition-colors group"
-              onClick={() => openDrawer("profile")}
-            >
-              <div className="w-7 h-7 rounded-full bg-violet-600/20 border border-violet-500/30 flex items-center justify-center text-violet-400 group-hover:border-violet-500/50 transition-colors">
-                {user.avatar_url ? (
-                  <img src={user.avatar_url} alt={user.name || ""} className="w-full h-full rounded-full object-cover" />
-                ) : (
-                  <span className="text-xs font-bold uppercase">{(user.name || user.email)[0]}</span>
-                )}
-              </div>
-              <span className="text-sm text-zinc-400 group-hover:text-zinc-200 hidden sm:block">
-                {user.name || user.email}
-              </span>
-            </div>
-          )}
-          <button
-            onClick={logout}
-            className="flex items-center gap-2 bg-zinc-800 hover:bg-red-900/40 text-zinc-400 hover:text-red-400 px-3 py-2 rounded-xl text-sm font-medium transition-colors border border-zinc-700"
-            title="Sign out"
-          >
-            <LogOut size={16} />
-          </button>
-          <button
-            onClick={() => setHistoryOpen(true)}
-            className="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 px-4 py-2 rounded-xl text-sm font-medium transition-colors border border-zinc-700"
-          >
-            <History size={16} />
-            History
-          </button>
-          <button
-            onClick={() => {
-              setAttentionOpen(v => !v);
-              setFilterOpen(false);
-            }}
-            className="relative p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors border border-zinc-700"
-            title="Needs Attention"
-          >
-            <BellRing size={18} />
-            {(dashSummary?.attention_items?.length ?? 0) > 0 && (
-              <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] leading-4 text-center">
-                {Math.min(dashSummary?.attention_items?.length ?? 0, 9)}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => {
-              setFilterOpen(v => !v);
-              setAttentionOpen(false);
-            }}
-            className={`p-2 rounded-xl transition-colors border ${
-              filterActive
-                ? "bg-violet-600/20 border-violet-500/40 text-violet-300"
-                : "bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-400 hover:text-zinc-100"
-            }`}
-            title="Filters"
-          >
-            <SlidersHorizontal size={18} />
-          </button>
-          <button
-            onClick={() => openDrawer()}
-            className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors"
-          >
-            <PlusCircle size={16} />
-            Manage Data
-          </button>
-          <button
-            onClick={() => setConfigOpen(true)}
-            className="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors border border-zinc-700"
-          >
-            <Settings size={18} />
-          </button>
-        </div>
-
-        {attentionOpen && (
-          <div ref={attentionRef} className="absolute right-20 top-14 w-[420px] z-30">
-            <AttentionSection items={dashSummary?.attention_items ?? []} loading={lDash && !dashSummary} />
+      <header className="sticky top-0 z-20 backdrop-blur-md bg-zinc-950/85 border-b border-zinc-800/60">
+        <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center gap-4">
+          <div className="flex items-baseline gap-3">
+            <h1 className="text-base font-semibold tracking-tight text-zinc-100">SubTracker</h1>
+            <span className="text-xs text-zinc-500">{monthLabel}</span>
           </div>
-        )}
 
-        {filterOpen && (
-          <div ref={filterRef} className="absolute right-0 top-14 w-[520px] z-30 rounded-2xl border border-zinc-800 bg-zinc-900 p-3 shadow-2xl">
-            <DashboardFilterBar filters={filters} onChange={setFilters} active={filterActive} />
+          <button
+            onClick={() => setPaletteOpen(true)}
+            className="flex-1 max-w-md ml-6 hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg
+                       bg-zinc-900/60 border border-zinc-800 hover:border-zinc-700
+                       text-zinc-500 hover:text-zinc-300 text-sm transition-colors"
+          >
+            <Search size={13} />
+            <span className="flex-1 text-left">Add transaction, subscription, EMI…</span>
+            <kbd className="hidden lg:inline text-[10px] font-mono text-zinc-600 border border-zinc-700/60 rounded px-1.5 py-0.5">⌘K</kbd>
+          </button>
+
+          <div className="flex items-center gap-1 ml-auto">
+            <IconBtn
+              onClick={() => {
+                setAttentionOpen(v => !v);
+                setFilterOpen(false);
+                setProfileOpen(false);
+              }}
+              active={attentionOpen}
+              badge={attentionCount}
+              title="Attention"
+            >
+              <BellRing size={16} />
+            </IconBtn>
+
+            <IconBtn
+              onClick={() => {
+                setFilterOpen(v => !v);
+                setAttentionOpen(false);
+                setProfileOpen(false);
+              }}
+              active={filterActive || filterOpen}
+              accent={filterActive}
+              title="Filters"
+            >
+              <SlidersHorizontal size={16} />
+            </IconBtn>
+
+            <IconBtn onClick={() => setHistoryOpen(true)} title="History">
+              <History size={16} />
+            </IconBtn>
+
+            <button
+              onClick={() => setPaletteOpen(true)}
+              className="ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium transition-colors"
+            >
+              <Plus size={15} />
+              <span className="hidden sm:inline">Add</span>
+            </button>
+
+            {user && (
+              <button
+                onClick={() => {
+                  setProfileOpen(v => !v);
+                  setAttentionOpen(false);
+                  setFilterOpen(false);
+                }}
+                className={cn(
+                  "ml-2 flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-full transition-colors",
+                  profileOpen ? "bg-zinc-800" : "hover:bg-zinc-800/70",
+                )}
+                title={user.email}
+              >
+                <span className="w-7 h-7 rounded-full bg-violet-500/20 border border-violet-500/30 flex items-center justify-center text-violet-300 text-[11px] font-bold uppercase overflow-hidden">
+                  {user.avatar_url
+                    ? <img src={user.avatar_url} alt="" className="w-full h-full object-cover" />
+                    : (user.name || user.email)[0]}
+                </span>
+                <ChevronDown size={12} className="text-zinc-500" />
+              </button>
+            )}
+          </div>
+        </div>
+      </header>
+
+      {/*
+        Popover layer — rendered as fixed siblings of the header, NOT inside it.
+        This avoids stacking-context wars: the sticky header creates its own
+        z-context, and any z-index on children of the header is bounded by it.
+        Lifting these elements to the dashboard root means z-[60] / z-[70]
+        actually mean what they say.
+      */}
+      {anyPopoverOpen && (
+        <button
+          type="button"
+          onClick={() => closeAllPopovers()}
+          aria-label="Close popover"
+          className="fixed inset-0 z-[60] cursor-default"
+        />
+      )}
+      {attentionOpen && (
+        <div className="fixed right-6 top-[60px] w-[380px] z-[70]">
+          <AttentionSection items={dashSummary?.attention_items ?? []} loading={lDash && !dashSummary} embedded />
+        </div>
+      )}
+      {filterOpen && (
+        <div className="fixed right-6 top-[60px] w-[min(92vw,520px)] z-[70] rounded-2xl border border-zinc-800 bg-zinc-900 p-3 shadow-2xl">
+          <DashboardFilterBar filters={filters} onChange={setFilters} active={filterActive} />
+        </div>
+      )}
+      {profileOpen && user && (
+        <div className="fixed right-6 top-[60px] w-64 z-[70] rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl overflow-hidden">
+          <div className="px-3 py-2.5 border-b border-zinc-800">
+            <div className="text-sm text-zinc-100 truncate">{user.name || "—"}</div>
+            <div className="text-[11px] text-zinc-500 truncate">{user.email}</div>
+          </div>
+          <div className="p-1">
+            <MenuItem icon={<UserIcon size={13} />} onClick={() => closeAllPopovers()}>
+              Profile
+            </MenuItem>
+            <MenuItem icon={<LogOut size={13} />} onClick={logout} danger>
+              Sign out
+            </MenuItem>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-[1400px] mx-auto px-6 py-6">
+        <RecurringSuggestionsStrip onConvert={() => setPaletteOpen(true)} />
+
+        {/*
+          Drag-and-drop masonry. Three independent columns; cards reorder
+          within a column or move between columns. Column widths are
+          unequal on desktop to give wider cards more room — cross-column
+          drag still works because each column is a separate droppable.
+        */}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragStart={(ev) => setActiveDragId(ev.active.id as CardId)}
+          onDragOver={handleDragOver}
+          onDragEnd={handleDragEnd}
+          onDragCancel={() => setActiveDragId(null)}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-5 items-start">
+            <DroppableColumn id="col0" className="lg:col-span-5"
+              cardIds={layout.columns.col0}
+              renderCard={renderCard}
+            />
+            <DroppableColumn id="col1" className="lg:col-span-4"
+              cardIds={layout.columns.col1}
+              renderCard={renderCard}
+            />
+            <DroppableColumn id="col2" className="lg:col-span-3"
+              cardIds={layout.columns.col2}
+              renderCard={renderCard}
+            />
+          </div>
+
+          {/* Floating preview during drag — keeps the original card visible
+              with a slight transform so the user has a clear target. */}
+          <DragOverlay dropAnimation={null}>
+            {activeDragId ? (
+              <div className="opacity-90 scale-[1.02] rotate-[-0.5deg] shadow-2xl">
+                {renderCard(activeDragId)}
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+
+        {/* Restore strip */}
+        {layout.hidden.length > 0 && (
+          <div className="mt-8 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 flex items-center gap-3 flex-wrap">
+            <span className="text-[11px] uppercase tracking-wider font-semibold text-zinc-500 inline-flex items-center gap-1.5">
+              <Eye size={12} /> Hidden ({layout.hidden.length})
+            </span>
+            {ALL_CARDS.filter(c => layout.hidden.includes(c.id)).map(c => (
+              <button
+                key={c.id}
+                onClick={() => restore(c.id)}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg
+                           bg-zinc-800/60 hover:bg-zinc-800 border border-zinc-700/60
+                           text-xs text-zinc-300 hover:text-zinc-100 transition-colors"
+              >
+                {c.label}
+                <span className="text-violet-400">+</span>
+              </button>
+            ))}
           </div>
         )}
       </div>
 
-      <ResizableGrid
-        slots={slots}
-        cols={3}
-        rowHeights={getRowHeights(layout, 3)}
-        onWidthChange={handleWidthChange}
-        onRowHeightChange={handleRowHeightChange}
-        className="shadow-2xl"
-      />
+      <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} />
 
-      <CrudDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        initialTab={drawerTab as any}
-        user={user}
-        onUserUpdate={(u) => {
-          localStorage.setItem("auth_user", JSON.stringify(u));
-          window.location.reload(); // Refresh to update all references
-        }}
-        onLogout={logout}
-        subscriptions={subscriptions}
-        emis={emis}
-        cards={cards}
-        accounts={accounts}
-        receivables={receivables}
-        capex={capex}
-        rent={rent}
-        onRefetch={refetchAll}
-      />
-
-      <HistoryPanel
-        open={historyOpen}
-        onClose={() => setHistoryOpen(false)}
-      />
-
-      <LayoutConfigurator
-        open={configOpen}
-        onClose={() => setConfigOpen(false)}
-        layout={layout}
-        onLayoutChange={setLayout}
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onCreated={() => refetchAll()}
       />
     </div>
+  );
+}
+
+function IconBtn({
+  onClick, children, title, active = false, accent = false, badge = 0,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+  title: string;
+  active?: boolean;
+  accent?: boolean;
+  badge?: number;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={cn(
+        "relative p-2 rounded-lg transition-colors",
+        active
+          ? accent
+            ? "bg-violet-500/15 text-violet-300 border border-violet-500/30"
+            : "bg-zinc-800 text-zinc-100 border border-zinc-700"
+          : "text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800/70 border border-transparent",
+      )}
+    >
+      {children}
+      {badge > 0 && (
+        <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 px-1 rounded-full bg-red-500 text-white text-[9px] num leading-3 text-center">
+          {Math.min(badge, 9)}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function DroppableColumn({
+  id, cardIds, renderCard, className,
+}: {
+  id: ColumnId;
+  cardIds: CardId[];
+  renderCard: (id: CardId) => React.ReactNode;
+  className?: string;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div className={cn("flex flex-col gap-5", className)}>
+      <SortableContext items={cardIds} strategy={verticalListSortingStrategy}>
+        {cardIds.map(cardId => (
+          <SortableCard key={cardId} id={cardId}>
+            {renderCard(cardId)}
+          </SortableCard>
+        ))}
+      </SortableContext>
+      {/* Empty drop zone — receives drags when the column has no children
+          or when the user drops below the last card. Slim and only visible
+          on hover-during-drag. */}
+      <div
+        ref={setNodeRef}
+        className={cn(
+          "rounded-xl border border-dashed transition-colors",
+          cardIds.length === 0 ? "min-h-[120px]" : "min-h-[40px]",
+          isOver
+            ? "border-violet-500/40 bg-violet-500/5"
+            : "border-transparent",
+        )}
+      >
+        {cardIds.length === 0 && (
+          <div className="h-full flex items-center justify-center text-xs text-zinc-600 py-8">
+            drop a card here
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MenuItem({
+  children, icon, onClick, danger = false,
+}: {
+  children: React.ReactNode; icon: React.ReactNode;
+  onClick: () => void; danger?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-sm transition-colors",
+        danger
+          ? "text-red-400 hover:bg-red-500/10"
+          : "text-zinc-300 hover:bg-zinc-800",
+      )}
+    >
+      {icon}
+      <span>{children}</span>
+    </button>
   );
 }

@@ -1,4 +1,4 @@
-import type { GmailStatus, SyncResult } from "./types";
+import type { GmailStatus, SyncResult, RecurringSuggestion } from "./types";
 
 import { getApiBase } from "@/lib/apiBase";
 
@@ -44,3 +44,11 @@ export const syncGmail = () =>
 
 export const disconnectGmail = () =>
   request<{ disconnected: boolean }>("/gmail/disconnect", { method: "DELETE" });
+
+export const getRecurringSuggestions = (params?: { lookbackDays?: number; minOccurrences?: number }) => {
+  const qs = new URLSearchParams();
+  if (params?.lookbackDays)    qs.set("lookback_days",    String(params.lookbackDays));
+  if (params?.minOccurrences)  qs.set("min_occurrences",  String(params.minOccurrences));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<RecurringSuggestion[]>(`/gmail/recurring-suggestions${suffix}`);
+};

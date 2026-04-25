@@ -1,2 +1,8 @@
-export type { GmailStatus, SyncResult } from "./types";
-export { getGmailStatus, getConnectUrl, syncGmail, disconnectGmail } from "./api";
+export type { GmailStatus, SyncResult, RecurringSuggestion } from "./types";
+export {
+  getGmailStatus,
+  getConnectUrl,
+  syncGmail,
+  disconnectGmail,
+  getRecurringSuggestions,
+} from "./api";

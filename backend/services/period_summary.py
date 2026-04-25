@@ -1,13 +1,17 @@
 """
 Period summary service.
-When date filters are active, recalculates every cash-flow figure
-for the selected window instead of using point-in-time balances.
+
+When date filters are active, recalculates every cash-flow figure for
+the selected window from the LEDGER + V2 tables only. Legacy table
+queries were removed in Phase 3 — the host accounts.py / cards.py /
+obligations routes now read/write through the ledger, so a single
+source of truth covers every consumer.
 """
 import calendar
 from datetime import date
 from typing import Optional
+from decimal import Decimal
 from db import fetchall, fetchone
-from services.card_transactions import get_filtered_cc_total
 
 
 def _monthly_occurrences(due_day: int, from_dt: date, to_dt: date) -> int:
@@ -25,6 +29,27 @@ def _monthly_occurrences(due_day: int, from_dt: date, to_dt: date) -> int:
     return count
 
 
+def _frequency_count(frequency: str, due_day: int, from_dt: date, to_dt: date) -> float:
+    """Approximate # of times an obligation fires within a date window."""
+    if frequency == "monthly":
+        return float(_monthly_occurrences(due_day, from_dt, to_dt))
+    if frequency == "yearly":
+        # Yearly obligations: 1 hit if window crosses anchor month, else 0.
+        # Approximation: months / 12.
+        months = _monthly_occurrences(1, from_dt, to_dt)
+        return months / 12.0
+    if frequency == "quarterly":
+        months = _monthly_occurrences(1, from_dt, to_dt)
+        return months / 3.0
+    if frequency == "half_yearly":
+        months = _monthly_occurrences(1, from_dt, to_dt)
+        return months / 6.0
+    if frequency == "weekly":
+        days = max(0, (to_dt - from_dt).days + 1)
+        return days / 7.0
+    return 0.0  # one_time / unknown
+
+
 def get_period_summary(
     user_id: str,
     date_from: Optional[str] = None,
@@ -37,106 +62,136 @@ def get_period_summary(
     to_dt   = date.fromisoformat(date_to)   if date_to   else None
     period  = bool(from_dt or to_dt)
 
-    # ── Bank balance (always current) ─────────────────────────────────────
-    accounts     = fetchall("SELECT balance FROM bank_accounts WHERE user_id = %s", (user_id,))
-    total_liquid = sum(float(a["balance"]) for a in accounts)
+    # When the user provides only one bound, fill in a sensible default
+    # for the other so downstream date math doesn't blow up on None.
+    today = date.today()
+    if period and not from_dt:
+        from_dt = today.replace(day=1)        # start of current month
+    if period and not to_dt:
+        to_dt   = today
 
-    # ── CC ─────────────────────────────────────────────────────────────────
-    # Preferred: v2 ledger + billing cycles.
-    # Fallback: legacy card_transactions, then credit_cards.outstanding.
+    # ── Liquid balances (always current; filtered to bank/wallet/cash) ────
+    liquid = fetchone(
+        """
+        SELECT COALESCE(SUM(
+          CASE
+            WHEN le.direction='credit' THEN le.amount
+            WHEN le.direction='debit'  THEN -le.amount
+            ELSE 0
+          END
+        ), 0) AS total
+        FROM financial_accounts fa
+        LEFT JOIN ledger_entries le
+          ON le.account_id = fa.id
+         AND le.status='posted'
+         AND le.deleted_at IS NULL
+        WHERE fa.user_id=%s
+          AND fa.kind IN ('bank','wallet','cash')
+          AND fa.is_active=TRUE
+          AND fa.deleted_at IS NULL
+        """,
+        (user_id,)
+    )
+    total_liquid = float(liquid["total"] if liquid else 0.0)
+
+    # ── Credit cards — ledger-derived debit total within window ───────────
     status = (billed_statement_status or "all").lower()
     if status not in ("all", "paid", "unpaid"):
         status = "all"
 
-    has_v2_cc = fetchone(
+    cc_total = _filtered_cc_total(
+        user_id=user_id,
+        date_from=date_from,
+        date_to=date_to,
+        include_billed=include_billed,
+        include_unbilled=include_unbilled,
+        billed_statement_status=status,
+    )
+    cc_source = "transactions"
+
+    # ── Recurring obligations (subscriptions / EMIs / rent / others) ──────
+    obligations = fetchall(
         """
-        SELECT COUNT(*) AS cnt
-        FROM financial_accounts
-        WHERE user_id=%s AND kind='credit_card' AND deleted_at IS NULL
+        SELECT ro.id, ro.type, ro.amount, ro.frequency, ro.due_day,
+               ro.total_installments, ro.completed_installments
+        FROM recurring_obligations ro
+        WHERE ro.user_id=%s
+          AND ro.deleted_at IS NULL
+          AND ro.status='active'
         """,
         (user_id,)
     )
-    if has_v2_cc and int(has_v2_cc["cnt"]) > 0:
-        cc_total = _get_filtered_cc_total_v2(
-            user_id=user_id,
-            date_from=date_from,
-            date_to=date_to,
-            include_billed=include_billed,
-            include_unbilled=include_unbilled,
-            billed_statement_status=status,
-        )
-        cc_source = "transactions"
-    else:
-        has_txn = fetchone(
-            "SELECT COUNT(*) AS cnt FROM card_transactions WHERE user_id = %s", (user_id,)
-        )
-        if has_txn and int(has_txn["cnt"]) > 0:
-            cc_total = get_filtered_cc_total(
-                user_id, date_from, date_to, include_billed, include_unbilled, status
-            )
-            cc_source = "transactions"
-        else:
-            cards    = fetchall("SELECT outstanding FROM credit_cards WHERE user_id = %s", (user_id,))
-            cc_total = sum(float(c["outstanding"]) for c in cards)
-            cc_source = "outstanding"
-
-    # ── Subscriptions ──────────────────────────────────────────────────────
-    subs       = fetchall("SELECT amount, due_day, billing_cycle FROM subscriptions WHERE user_id = %s", (user_id,))
     subs_total = 0.0
-    for s in subs:
-        amt, due_day, cycle = float(s["amount"]), int(s["due_day"]), s["billing_cycle"]
-        if not period:
-            subs_total += amt
-        elif cycle == "monthly":
-            subs_total += amt * _monthly_occurrences(due_day, from_dt, to_dt)
-        elif cycle == "yearly":
-            months = _monthly_occurrences(1, from_dt, to_dt)   # months in range
-            subs_total += amt / 12 * months
-        elif cycle == "weekly":
-            days = (to_dt - from_dt).days + 1
-            subs_total += amt * (days / 7)
-
-    # ── EMIs ───────────────────────────────────────────────────────────────
-    emis       = fetchall("SELECT amount, due_day, paid_months, total_months FROM emis WHERE user_id = %s", (user_id,))
     emis_total = 0.0
-    for e in emis:
-        remaining = int(e["total_months"]) - int(e["paid_months"])
-        if remaining <= 0:
-            continue
-        amt, due_day = float(e["amount"]), int(e["due_day"])
-        if not period:
-            emis_total += amt
-        else:
-            count = min(_monthly_occurrences(due_day, from_dt, to_dt), remaining)
-            emis_total += amt * count
-
-    # ── Rent ───────────────────────────────────────────────────────────────
-    rent_row   = fetchone("SELECT amount, due_day FROM rent_config WHERE user_id = %s", (user_id,))
     rent_total = 0.0
-    if rent_row:
-        amt, due_day = float(rent_row["amount"]), int(rent_row["due_day"])
+    for o in obligations:
+        amt = float(o["amount"] or 0)
+        due_day = int(o["due_day"] or 1)
+        freq = o.get("frequency") or "monthly"
         if not period:
-            rent_total = amt
+            count = 1.0
         else:
-            rent_total = amt * _monthly_occurrences(due_day, from_dt, to_dt)
-
-    # ── Receivables ────────────────────────────────────────────────────────
-    receivables       = fetchall("SELECT amount, expected_day FROM receivables WHERE user_id = %s", (user_id,))
-    receivables_total = 0.0
-    for r in receivables:
-        amt, exp_day = float(r["amount"]), int(r["expected_day"])
-        if not period:
-            receivables_total += amt
+            count = _frequency_count(freq, due_day, from_dt, to_dt)
+        if o.get("type") == "emi":
+            remaining = max(0, int(o.get("total_installments") or 0) - int(o.get("completed_installments") or 0))
+            if remaining <= 0:
+                continue
+            count = min(count, float(remaining))
+            emis_total += amt * count
+        elif o.get("type") == "rent":
+            rent_total += amt * count
         else:
-            receivables_total += amt * _monthly_occurrences(exp_day, from_dt, to_dt)
+            subs_total += amt * count
 
-    # ── CapEx (one-time, not date-filtered) ────────────────────────────────
-    capex_items = fetchall("SELECT amount FROM capex_items WHERE user_id = %s", (user_id,))
-    capex_total = sum(float(c["amount"]) for c in capex_items)
+    # ── Receivables (v2) ──────────────────────────────────────────────────
+    receivables = fetchall(
+        """
+        SELECT amount_expected, amount_received
+        FROM receivables_v2
+        WHERE user_id=%s
+          AND deleted_at IS NULL
+          AND status IN ('expected','partially_received')
+        """,
+        (user_id,)
+    )
+    receivables_total = sum(
+        float((r["amount_expected"] or 0)) - float((r["amount_received"] or 0))
+        for r in receivables
+    )
 
-    # ── Derived ────────────────────────────────────────────────────────────
-    net_after_cc   = total_liquid - cc_total - rent_total
-    cash_flow_gap  = net_after_cc + receivables_total - capex_total - subs_total - emis_total
+    # ── CapEx (v2) ────────────────────────────────────────────────────────
+    if period:
+        capex_rows = fetchall(
+            """
+            SELECT amount_planned, amount_spent
+            FROM capex_items_v2
+            WHERE user_id=%s
+              AND status IN ('planned','in_progress')
+              AND deleted_at IS NULL
+              AND target_date IS NOT NULL
+              AND target_date BETWEEN %s AND %s
+            """,
+            (user_id, from_dt or date.today(), to_dt or date.today())
+        )
+    else:
+        capex_rows = fetchall(
+            """
+            SELECT amount_planned, amount_spent
+            FROM capex_items_v2
+            WHERE user_id=%s
+              AND status IN ('planned','in_progress')
+              AND deleted_at IS NULL
+            """,
+            (user_id,)
+        )
+    capex_total = sum(
+        float((c["amount_planned"] or 0)) - float((c["amount_spent"] or 0))
+        for c in capex_rows
+    )
+
+    # ── Derived ───────────────────────────────────────────────────────────
+    net_after_cc  = total_liquid - cc_total - rent_total
+    cash_flow_gap = net_after_cc + receivables_total - capex_total - subs_total - emis_total
 
     return {
         "total_liquid":      total_liquid,
@@ -154,7 +209,7 @@ def get_period_summary(
     }
 
 
-def _get_filtered_cc_total_v2(
+def _filtered_cc_total(
     user_id: str,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -164,10 +219,7 @@ def _get_filtered_cc_total_v2(
 ) -> float:
     """
     Sum credit-card debit ledger entries with billed/unbilled selection.
-    billed_statement_status applies only to billed entries:
-      - paid:   billed cycle balance_due <= 0
-      - unpaid: billed cycle balance_due > 0
-      - all:    any billed cycle
+    billed_statement_status applies only to billed entries.
     """
     if not include_billed and not include_unbilled:
         return 0.0

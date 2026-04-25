@@ -1,9 +1,23 @@
 """
 Card transaction service — manages per-card billed/unbilled transactions.
 Pure business logic, no Flask imports.
+
+Phase-3 cutover: every add/delete also writes through to the ledger so the
+legacy table stays consistent with the live billing-cycle balances surfaced
+on the dashboard.  Reads still hit `card_transactions` for compatibility
+with older mobile builds; Phase-3 backfill (data_migration.py) will move
+historical rows into the ledger so the legacy view eventually disappears.
 """
+import logging
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 from db import fetchall, fetchone, execute, execute_void
+from services import ledger
+from services.ledger import LedgerError
+from services.categorization import infer_category
+
+log = logging.getLogger(__name__)
 
 
 def list_transactions(card_id: str, user_id: str,
@@ -38,21 +52,62 @@ def list_transactions(card_id: str, user_id: str,
 def add_transaction(card_id: str, user_id: str,
                     description: str, amount: float,
                     txn_date: Optional[str] = None) -> dict:
-    return execute(
+    row = execute(
         """INSERT INTO card_transactions (card_id, user_id, description, amount, txn_date)
            VALUES (%s, %s, %s, %s, COALESCE(%s::date, CURRENT_DATE)) RETURNING *""",
         (card_id, user_id, description, amount, txn_date),
     )
 
+    # Mirror into ledger so billing cycles + dashboard see this transaction.
+    try:
+        eff = row["txn_date"] if isinstance(row["txn_date"], date) \
+              else datetime.fromisoformat(str(row["txn_date"])).date()
+        category = infer_category(merchant=description, description=description, user_id=user_id)
+        ledger.post_entry(
+            user_id=user_id,
+            account_id=card_id,
+            direction="debit",
+            amount=Decimal(str(amount)),
+            description=description,
+            effective_date=eff,
+            category=category,
+            source="manual",
+            idempotency_key=f"legacy_card_txn:{row['id']}",
+        )
+    except LedgerError as exc:
+        # If the card_id is not a financial_accounts row (rare — only happens
+        # when this user's CC was never created via /api/cards or
+        # /api/financial-accounts), keep the legacy row but warn loudly.
+        log.warning("legacy add_transaction skipped ledger write: %s", exc)
+
+    return row
+
 
 def delete_transaction(txn_id: str, card_id: str, user_id: str) -> Optional[dict]:
     """Only unbilled transactions can be deleted."""
-    return execute(
+    row = execute(
         """DELETE FROM card_transactions
            WHERE id = %s AND card_id = %s AND user_id = %s AND statement_id IS NULL
            RETURNING id""",
         (txn_id, card_id, user_id),
     )
+    if not row:
+        return None
+
+    # Reverse the mirrored ledger entry, if it exists.
+    mirror = fetchone(
+        """
+        SELECT id FROM ledger_entries
+        WHERE user_id=%s AND idempotency_key=%s AND deleted_at IS NULL
+        """,
+        (user_id, f"legacy_card_txn:{txn_id}"),
+    )
+    if mirror:
+        try:
+            ledger.reverse_entry(mirror["id"], user_id, "Legacy CC txn deleted")
+        except LedgerError as exc:
+            log.warning("legacy delete_transaction skipped ledger reverse: %s", exc)
+    return row
 
 
 def list_statements(card_id: str, user_id: str) -> list:

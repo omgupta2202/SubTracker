@@ -7,13 +7,37 @@ GET /api/dashboard/cash-flow      inflows vs outflows over a period
 GET /api/dashboard/utilization    credit utilization per card
 """
 import calendar
+import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from flask import Blueprint, request, g
 from utils import ok, err
 from db import fetchall, fetchone
 from services import ledger
+from services import snapshot_service
 from services.obligation_service import get_upcoming, get_monthly_obligations_total
+
+log = logging.getLogger(__name__)
+
+
+def _ensure_today_snapshot(user_id: str) -> None:
+    """
+    Auto-capture a daily snapshot the first time a user hits the dashboard
+    on any given day. Idempotent — `snapshot_service.capture` upserts on
+    (user_id, snapshot_date), so multiple callers in the same day are safe.
+    Failure is non-fatal: we never block the dashboard on a snapshot error.
+    """
+    today_iso = date.today().isoformat()
+    try:
+        existing = fetchone(
+            "SELECT 1 FROM daily_snapshots WHERE user_id=%s AND snapshot_date=%s",
+            (user_id, today_iso),
+        )
+        if existing:
+            return
+        snapshot_service.capture(user_id, trigger="auto_dashboard")
+    except Exception as exc:
+        log.warning("auto-snapshot failed for user %s: %s", user_id, exc, exc_info=True)
 
 bp = Blueprint("dashboard", __name__, url_prefix="/api/dashboard")
 
@@ -26,6 +50,7 @@ def summary():
     """
     user_id = g.user_id
     today = date.today()
+    _ensure_today_snapshot(user_id)
 
     # Liquid assets (single aggregate query; avoids per-account balance queries)
     liquid_accounts = fetchall(
@@ -102,19 +127,27 @@ def summary():
             "minimum_due": float(minimum),
         })
 
-    # Monthly burn:
-    # prefer posted ledger debits; if zero, fall back to recurring obligations baseline.
-    monthly_burn_ledger = ledger.get_monthly_burn(user_id, today.year, today.month)
-    obligations_monthly = get_monthly_obligations_total(user_id)
-    monthly_burn = monthly_burn_ledger if monthly_burn_ledger > 0 else obligations_monthly
+    # Monthly burn — three numbers, no silent picking:
+    #   monthly_burn          actual ledger debits this month-to-date
+    #   monthly_burn_baseline recurring obligations baseline (what the user owes per month)
+    #   monthly_burn_projected month-end projection: actual + remaining baseline
+    monthly_burn_actual   = ledger.get_monthly_burn(user_id, today.year, today.month)
+    obligations_monthly   = get_monthly_obligations_total(user_id)
 
-    # Prior month burn (for trend)
-    prior = today.replace(day=1) - timedelta(days=1)
-    prior_ledger_burn = ledger.get_monthly_burn(user_id, prior.year, prior.month)
-    prior_burn = prior_ledger_burn if prior_ledger_burn > 0 else obligations_monthly
+    # Pro-rate the baseline by the fraction of the month not yet elapsed,
+    # so projections do not double-count obligations the user has already paid.
+    days_in_month   = calendar.monthrange(today.year, today.month)[1]
+    days_remaining  = max(0, days_in_month - today.day)
+    baseline_remain = (obligations_monthly * Decimal(days_remaining)) / Decimal(days_in_month) if obligations_monthly else Decimal("0")
+    monthly_burn_projected = monthly_burn_actual + baseline_remain
+
+    # Prior month burn — always ledger; never fall back to baseline (that would
+    # silently flatten the trend line).
+    prior      = today.replace(day=1) - timedelta(days=1)
+    prior_burn = ledger.get_monthly_burn(user_id, prior.year, prior.month)
     burn_trend_pct = None
     if prior_burn and prior_burn != 0:
-        burn_trend_pct = round(float((monthly_burn - prior_burn) / prior_burn * 100), 1)
+        burn_trend_pct = round(float((monthly_burn_actual - prior_burn) / prior_burn * 100), 1)
 
     # Upcoming obligations (used for horizon card)
     upcoming_30d = get_upcoming(user_id, days=30, ensure_generated=False)
@@ -250,7 +283,7 @@ def summary():
         """,
         (user_id,)
     )
-    total_capex = fetchone(
+    total_capex_lifetime = fetchone(
         """
         SELECT COALESCE(SUM(amount_planned - amount_spent), 0) AS total
         FROM capex_items_v2
@@ -258,14 +291,29 @@ def summary():
         """,
         (user_id,)
     )
+    # Cash-flow gap should only include capex actually due in the next 30 days,
+    # not lifetime planned spend (which can span years).
+    total_capex_30d = fetchone(
+        """
+        SELECT COALESCE(SUM(amount_planned - amount_spent), 0) AS total
+        FROM capex_items_v2
+        WHERE user_id=%s
+          AND status IN ('planned','in_progress')
+          AND deleted_at IS NULL
+          AND target_date IS NOT NULL
+          AND target_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+        """,
+        (user_id,)
+    )
 
-    obligations_30d = Decimal(str(upcoming_obligations_30d["total"]))
-    receivables_30d = Decimal(str(total_receivables_30d["total"]))
-    capex_total     = Decimal(str(total_capex["total"]))
+    obligations_30d   = Decimal(str(upcoming_obligations_30d["total"]))
+    receivables_30d   = Decimal(str(total_receivables_30d["total"]))
+    capex_lifetime    = Decimal(str(total_capex_lifetime["total"]))
+    capex_30d         = Decimal(str(total_capex_30d["total"]))
 
     cash_flow_gap = (
         total_liquid + receivables_30d
-        - total_cc_outstanding - obligations_30d - capex_total
+        - total_cc_outstanding - obligations_30d - capex_30d
     )
     utilization_pct = (
         round(float(total_cc_outstanding / total_cc_limit * 100), 1)
@@ -277,13 +325,16 @@ def summary():
         "total_cc_outstanding": float(total_cc_outstanding),
         "total_cc_minimum_due": float(total_cc_minimum),
         "credit_utilization_pct": utilization_pct,
-        "monthly_burn": float(monthly_burn),
+        "monthly_burn": float(monthly_burn_actual),
+        "monthly_burn_baseline": float(obligations_monthly),
+        "monthly_burn_projected": float(monthly_burn_projected),
         "monthly_burn_trend_pct": burn_trend_pct,
         "cash_flow_gap": float(cash_flow_gap),
         "net_after_cc": float(total_liquid - total_cc_outstanding),
         "upcoming_obligations_30d": float(obligations_30d),
         "total_receivables_30d": float(receivables_30d),
-        "total_capex_planned": float(capex_total),
+        "total_capex_planned": float(capex_lifetime),
+        "total_capex_due_30d": float(capex_30d),
         "accounts": [
             {"id": a["id"], "name": a["name"], "balance": a["balance"]}
             for a in liquid_accounts

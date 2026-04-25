@@ -6,8 +6,9 @@
  * No JWT header is attached here.
  */
 import type { AuthUser } from "./types";
+import { getApiBase } from "@/lib/apiBase";
 
-const BASE = "/api/auth";
+const BASE = `${getApiBase()}/auth`;
 
 async function authFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const res  = await fetch(`${BASE}${path}`, {

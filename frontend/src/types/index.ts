@@ -7,6 +7,15 @@ export interface Subscription {
   category: string;
 }
 
+export interface EmiMath {
+  outstanding_principal: number;
+  interest_paid_to_date: number;
+  principal_paid_to_date: number;
+  total_interest_over_loan: number;
+  scheduled_remaining: number;
+  foreclosure_savings: number;
+}
+
 export interface EMI {
   id: string;
   name: string;
@@ -15,6 +24,9 @@ export interface EMI {
   total_months: number;
   paid_months: number;
   due_day: number;
+  principal?: number | null;
+  interest_rate?: number | null;
+  emi_math?: EmiMath | null;
 }
 
 export interface CreditCard {
@@ -63,6 +75,8 @@ export interface AllocationItem {
   days_left?: number;
   can_pay_minimum?: boolean;
   feasible?: boolean;
+  apr?: number;
+  interest_saved_monthly?: number;
 }
 
 export interface PostBalance {
@@ -208,12 +222,15 @@ export interface DashboardSummary {
   total_cc_minimum_due: number;
   credit_utilization_pct: number | null;
   monthly_burn: number;
+  monthly_burn_baseline?: number;
+  monthly_burn_projected?: number;
   monthly_burn_trend_pct: number | null;
   cash_flow_gap: number;
   net_after_cc: number;
   upcoming_obligations_30d: number;
   total_receivables_30d: number;
   total_capex_planned: number;
+  total_capex_due_30d?: number;
   accounts: DashboardAccount[];
   credit_cards: DashboardCreditCard[];
   upcoming_dues_7d: UpcomingObligation[];
@@ -271,6 +288,9 @@ export interface Obligation {
   completed_installments?: number;
   remaining_installments?: number;
   lender?: string;
+  principal?: number | null;
+  interest_rate?: number | null;
+  emi_math?: EmiMath | null;
 }
 
 export type CardId =

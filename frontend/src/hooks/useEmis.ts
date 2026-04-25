@@ -19,6 +19,9 @@ export function useEmis() {
         total_months: r.total_installments ?? 0,
         paid_months: r.completed_installments ?? 0,
         due_day: r.due_day ?? 1,
+        principal: r.principal ?? null,
+        interest_rate: r.interest_rate ?? null,
+        emi_math: r.emi_math ?? null,
       })));
       setError(null);
     } catch (e) {

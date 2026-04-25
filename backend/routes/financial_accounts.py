@@ -16,6 +16,7 @@ from utils import ok, err, require_fields
 from db import fetchall, fetchone, execute, execute_void
 from services import ledger
 from services import credit_card_cycles as cc_cycles
+from services.allocation_engine import invalidate as invalidate_allocation
 
 bp = Blueprint("financial_accounts", __name__, url_prefix="/api/financial-accounts")
 
@@ -112,6 +113,7 @@ def create_account():
             idempotency_key=f"opening:{account['id']}",
         )
 
+    invalidate_allocation(g.user_id)
     return ok(_get_with_extensions(account["id"])), 201
 
 
@@ -175,6 +177,7 @@ def update_account(account_id):
     elif kind == "credit_card":
         _update_cc_ext(account_id, body)
 
+    invalidate_allocation(g.user_id)
     return ok(_get_with_extensions(account_id))
 
 
@@ -193,6 +196,7 @@ def delete_account(account_id):
         "UPDATE financial_accounts SET deleted_at=NOW(), updated_at=NOW() WHERE id=%s",
         (account_id,)
     )
+    invalidate_allocation(g.user_id)
     return ok({"deleted": True})
 
 
@@ -284,6 +288,7 @@ def create_billing_cycle(account_id):
         return cycle_err
     if not cycle:
         return err("Could not create billing cycle", 400)
+    invalidate_allocation(g.user_id)
     return ok(cycle), 201
 
 
@@ -330,14 +335,18 @@ def _create_extension(kind: str, account_id: str, body: dict):
             """
             INSERT INTO account_cc_ext
               (account_id, last4, credit_limit, billing_cycle_day,
-               due_offset_days, reward_program)
-            VALUES (%s,%s,%s,%s,%s,%s)
+               due_offset_days, reward_program,
+               minimum_due_pct, minimum_due_floor)
+            VALUES (%s,%s,%s,%s,%s,%s,
+                    COALESCE(%s, 0.05), COALESCE(%s, 100))
             ON CONFLICT (account_id) DO NOTHING
             """,
             (
                 account_id, body.get("last4"), body.get("credit_limit"),
                 body.get("billing_cycle_day"), body.get("due_offset_days", 20),
                 body.get("reward_program"),
+                body.get("minimum_due_pct"),
+                body.get("minimum_due_floor"),
             )
         )
     elif kind == "bnpl":
@@ -371,7 +380,10 @@ def _update_bank_ext(account_id: str, body: dict):
 
 
 def _update_cc_ext(account_id: str, body: dict):
-    allowed = {"last4", "credit_limit", "billing_cycle_day", "due_offset_days", "reward_program"}
+    allowed = {
+        "last4", "credit_limit", "billing_cycle_day", "due_offset_days",
+        "reward_program", "minimum_due_pct", "minimum_due_floor", "apr",
+    }
     fields = {k: v for k, v in body.items() if k in allowed}
     if not fields:
         return

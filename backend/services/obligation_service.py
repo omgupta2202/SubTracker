@@ -187,7 +187,7 @@ def list_obligations(
 
     where = " AND ".join(conditions)
 
-    return fetchall(
+    rows = fetchall(
         f"""
         SELECT ro.*,
                ext.lender, ext.principal, ext.interest_rate, ext.loan_account_no,
@@ -199,10 +199,14 @@ def list_obligations(
         """,
         params
     )
+    for row in rows:
+        if row.get("type") == "emi":
+            row["emi_math"] = _attach_emi_math(row)
+    return rows
 
 
 def get_by_id(obligation_id: str, user_id: str) -> Optional[dict]:
-    return fetchone(
+    row = fetchone(
         """
         SELECT ro.*,
                ext.lender, ext.principal, ext.interest_rate, ext.loan_account_no
@@ -211,6 +215,21 @@ def get_by_id(obligation_id: str, user_id: str) -> Optional[dict]:
         WHERE ro.id=%s AND ro.user_id=%s AND ro.deleted_at IS NULL
         """,
         (obligation_id, user_id)
+    )
+    if row and row.get("type") == "emi":
+        row["emi_math"] = _attach_emi_math(row)
+    return row
+
+
+def _attach_emi_math(row: dict) -> dict:
+    """Compute EMI interest/principal split for a recurring_obligations row."""
+    from services.emi_math import compute_emi_math
+    return compute_emi_math(
+        emi_amount=row.get("amount"),
+        principal=row.get("principal"),
+        annual_rate_pct=row.get("interest_rate"),
+        total_installments=row.get("total_installments"),
+        completed_installments=row.get("completed_installments"),
     )
 
 

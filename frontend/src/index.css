@@ -15,13 +15,34 @@
     @apply border-border;
   }
 
+  html, body {
+    font-family: "Inter Variable", "Inter", system-ui, -apple-system, sans-serif;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
   body {
     @apply bg-zinc-950 text-zinc-100 antialiased;
-    font-family: "Inter", system-ui, sans-serif;
+  }
+
+  /* Money + numbers always pick up JetBrains Mono via the .num class. */
+  .num, code, kbd, samp, pre, .font-mono {
+    font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-feature-settings: "tnum", "zero", "ss01";
   }
 
   /* Scrollbar */
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { @apply bg-zinc-950; }
-  ::-webkit-scrollbar-thumb { @apply bg-zinc-700 rounded-full; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-zinc-800 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-zinc-700; }
+
+  /* Selection */
+  ::selection { background: rgba(139,92,246,0.30); color: rgb(244 244 245); }
 }
+
+/* Subtle pulse for "live" or "syncing" indicators. */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+.pulse-soft { animation: pulse-soft 2.4s ease-in-out infinite; }

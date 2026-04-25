@@ -2,3 +2,25 @@
   base = "frontend"
   command = "npm run build"
   publish = "dist"
+
+# Set VITE_API_BASE in Netlify UI (Site settings → Environment variables) to
+# the absolute URL of the backend, e.g. https://api.subtracker.example.com/api
+# If unset, the frontend defaults to "/api" (same origin) — handled by the
+# redirect below for split deploys.
+[build.environment]
+  NODE_VERSION = "20"
+
+# When VITE_API_BASE is left as "/api" but the backend lives on a separate
+# host, set BACKEND_URL in Netlify env and Netlify will proxy /api/* to it.
+# Without this rule, /api/* would 404 on a static-only deploy.
+[[redirects]]
+  from   = "/api/*"
+  to     = "https://YOUR-BACKEND-HOST/api/:splat"
+  status = 200
+  force  = true
+
+# SPA fallback — must come AFTER /api/* so it doesn't swallow API calls.
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200

@@ -6,6 +6,7 @@ GET  /api/billing-cycles/:id               detail
 POST /api/financial-accounts/:id/billing-cycles   open a new cycle for a card
 POST /api/billing-cycles/:id/close         close a cycle and compute total_billed
 """
+import logging
 from decimal import Decimal
 from datetime import date, datetime, timedelta
 from typing import Tuple
@@ -15,6 +16,9 @@ from utils import ok, err
 from db import fetchall, fetchone, execute, execute_void
 from services import ledger
 from services import credit_card_cycles as cc_cycles
+from services.allocation_engine import invalidate as invalidate_allocation
+
+log = logging.getLogger(__name__)
 
 bp = Blueprint("billing_cycles", __name__, url_prefix="/api/billing-cycles")
 
@@ -35,8 +39,11 @@ def list_cycles():
         params.append(account_id)
         try:
             cc_cycles.auto_rollover(account_id, g.user_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning(
+                "auto_rollover failed for account_id=%s user_id=%s: %s",
+                account_id, g.user_id, exc, exc_info=True,
+            )
 
     params.append(limit)
     where = " AND ".join(conditions)
@@ -171,6 +178,7 @@ def update_cycle(cycle_id):
             return err("A cycle with this statement date already exists for this card.", 409)
         raise
     updated["statement_status"] = _statement_status(updated)
+    invalidate_allocation(g.user_id)
     return ok(updated)
 
 
@@ -207,6 +215,7 @@ def delete_cycle(cycle_id):
         (cycle["account_id"], cycle["account_id"], cycle["account_id"])
     )
 
+    invalidate_allocation(g.user_id)
     return ok({"deleted": True, "id": cycle_id})
 
 
@@ -261,7 +270,10 @@ def close_cycle(cycle_id):
         )
         total_billed = Decimal(str(result["total"]))
 
-    minimum_due = Decimal(str(body.get("minimum_due") or total_billed * Decimal("0.05")))
+    if body.get("minimum_due") is not None:
+        minimum_due = Decimal(str(body["minimum_due"]))
+    else:
+        minimum_due = Decimal(str(cc_cycles.compute_minimum_due(cycle_id, float(total_billed))))
 
     updated = execute(
         """
@@ -296,6 +308,7 @@ def close_cycle(cycle_id):
     )
 
     updated["statement_status"] = _statement_status(updated)
+    invalidate_allocation(g.user_id)
     return ok(updated)
 
 
@@ -320,6 +333,7 @@ def reopen_cycle(cycle_id):
         (cycle_id,),
     )
     updated["statement_status"] = _statement_status(updated)
+    invalidate_allocation(g.user_id)
     return ok(updated)
 
 

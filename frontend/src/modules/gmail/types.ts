@@ -10,3 +10,15 @@ export interface SyncResult {
   stmts_created: number;
   errors: string[];
 }
+
+export interface RecurringSuggestion {
+  merchant_key: string;
+  display_name: string;
+  frequency: "weekly" | "monthly" | "quarterly" | "yearly";
+  occurrences: number;
+  average_amount: number;
+  amount_variation: number;
+  first_seen: string;
+  last_seen: string;
+  sample_account: string | null;
+}

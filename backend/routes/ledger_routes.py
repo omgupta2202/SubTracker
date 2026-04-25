@@ -12,6 +12,8 @@ from flask import Blueprint, request, g
 from utils import ok, err, require_fields
 from services import ledger
 from services.ledger import LedgerError
+from services.allocation_engine import invalidate as invalidate_allocation
+from services.categorization import infer_category
 from db import fetchone, execute_void
 
 bp = Blueprint("ledger_routes", __name__, url_prefix="/api/ledger")
@@ -67,6 +69,7 @@ def reverse_entry(entry_id):
     reason = body.get("reason", "Manual reversal")
     try:
         result = ledger.reverse_entry(entry_id, g.user_id, reason)
+        invalidate_allocation(g.user_id)
         return ok(result)
     except LedgerError as e:
         return err(str(e), e.status)
@@ -85,6 +88,17 @@ def create_entry():
     except ValueError:
         return err("effective_date must be YYYY-MM-DD")
 
+    # Auto-infer category if the caller didn't pass one (or passed the
+    # ledger default 'other').
+    requested_cat = body.get("category")
+    if not requested_cat or requested_cat == "other":
+        requested_cat = infer_category(
+            merchant=body.get("merchant"),
+            description=body.get("description"),
+            user_id=g.user_id,
+            fallback="other",
+        )
+
     try:
         row = ledger.post_entry(
             user_id=g.user_id,
@@ -93,12 +107,13 @@ def create_entry():
             amount=Decimal(str(body["amount"])),
             description=body["description"],
             effective_date=eff_date,
-            category=body.get("category", "other"),
+            category=requested_cat,
             merchant=body.get("merchant"),
             source=body.get("source", "manual"),
             idempotency_key=body.get("idempotency_key"),
             billing_cycle_id=body.get("billing_cycle_id"),
         )
+        invalidate_allocation(g.user_id)
         return ok(row), 201
     except LedgerError as le:
         return err(str(le), le.status)
@@ -146,4 +161,5 @@ def assign_cycle(entry_id):
         """,
         (cycle_id, entry_id),
     )
+    invalidate_allocation(g.user_id)
     return ok({"entry_id": entry_id, "billing_cycle_id": cycle_id})

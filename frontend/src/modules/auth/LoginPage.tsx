@@ -162,7 +162,7 @@ export function LoginPage() {
             <div className="flex-1 h-px bg-zinc-800" />
           </div>
 
-          {/* Google SSO */}
+          {/* Google SSO — width must be a number of px (max 400), not a CSS string. */}
           <div className="flex justify-center">
             <GoogleLogin
               onSuccess={handleGoogleSuccess}
@@ -170,7 +170,7 @@ export function LoginPage() {
               theme="filled_black"
               size="large"
               shape="rectangular"
-              width="100%"
+              width={320}
             />
           </div>
         </div>

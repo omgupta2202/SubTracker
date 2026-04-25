@@ -1,229 +1,320 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { Subscription, EMI, CreditCard } from "@/types";
-import { formatINR } from "@/lib/utils";
-import { Flame, ChevronDown, ChevronUp, TrendingUp, TrendingDown } from "lucide-react";
-import { EditableRow, IField, IGrid, iCls, ISaveCancel } from "./InlineEdit";
+import { Flame, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Pencil } from "lucide-react";
+import { Card, CardHeader, CardTitle, CardAction, CardDivider } from "@/components/ui/Card";
+import { Stat, Row } from "@/components/ui/Stat";
+import { EditList, Field, FieldGrid, inputCls } from "@/components/ui/EditList";
+import { inrCompact, pct } from "@/lib/tokens";
+import { cn } from "@/lib/utils";
 import * as api from "@/services/api";
 
 interface Props {
   subscriptions: Subscription[];
   emis: EMI[];
   cards: CreditCard[];
-  /** Ledger-derived total monthly burn from /api/dashboard/summary */
   monthlyBurn?: number;
-  /** Month-over-month trend percentage (positive = higher burn than last month) */
+  monthlyBurnBaseline?: number;
+  monthlyBurnProjected?: number;
   monthlyBurnTrendPct?: number | null;
   onRefetch: () => void;
+  onHide?: () => void;
 }
 
-function SubRow({ sub, onRefetch }: { sub: Subscription; onRefetch: () => void }) {
+const SECTION_DOT = {
+  Subscriptions: "bg-violet-400",
+  EMIs:          "bg-sky-400",
+  "Card mins":   "bg-emerald-400",
+} as const;
+
+export function MonthlyBurnCard({
+  subscriptions, emis, cards,
+  monthlyBurn, monthlyBurnBaseline, monthlyBurnProjected, monthlyBurnTrendPct,
+  onRefetch, onHide,
+}: Props) {
   const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [name, setName] = useState(sub.name);
-  const [amount, setAmount] = useState(String(sub.amount));
-  const [cycle, setCycle] = useState<Subscription["billing_cycle"]>(sub.billing_cycle);
-  const [dueDay, setDueDay] = useState(String(sub.due_day));
-  const [category, setCategory] = useState(sub.category);
-
-  async function save() {
-    setSaving(true);
-    try {
-      await api.updateObligation(sub.id, {
-        name,
-        amount: Number(amount),
-        due_day: Number(dueDay),
-        frequency: cycle,
-        category,
-      });
-      setEditing(false);
-      onRefetch();
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <EditableRow editing={editing} onStartEdit={() => setEditing(true)}
-      form={
-        <>
-          <IField label="Name">
-            <input className={iCls} value={name} onChange={e => setName(e.target.value)} />
-          </IField>
-          <IGrid>
-            <IField label="Amount (₹)">
-              <input className={iCls} type="number" value={amount} onChange={e => setAmount(e.target.value)} />
-            </IField>
-            <IField label="Billing Cycle">
-              <select className={iCls} value={cycle} onChange={e => setCycle(e.target.value as Subscription["billing_cycle"])}>
-                <option value="monthly">Monthly</option>
-                <option value="yearly">Yearly</option>
-                <option value="weekly">Weekly</option>
-              </select>
-            </IField>
-          </IGrid>
-          <IGrid>
-            <IField label="Due Day">
-              <input className={iCls} type="number" min={1} max={31} value={dueDay} onChange={e => setDueDay(e.target.value)} />
-            </IField>
-            <IField label="Category">
-              <input className={iCls} value={category} onChange={e => setCategory(e.target.value)} />
-            </IField>
-          </IGrid>
-          <ISaveCancel saving={saving} onSave={save} onCancel={() => setEditing(false)} />
-        </>
-      }
-    >
-      <div className="flex items-center justify-between py-1 border-l border-zinc-700/50 pl-3 pr-8">
-        <div>
-          <p className="text-xs text-zinc-300">{sub.name}</p>
-          <p className="text-xs text-zinc-600">{sub.billing_cycle} · {sub.category}</p>
-        </div>
-        <span className="font-mono text-xs text-zinc-400">{formatINR(sub.amount)}</span>
-      </div>
-    </EditableRow>
-  );
-}
-
-function EmiRow({ emi, onRefetch }: { emi: EMI; onRefetch: () => void }) {
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [name, setName] = useState(emi.name);
-  const [lender, setLender] = useState(emi.lender);
-  const [amount, setAmount] = useState(String(emi.amount));
-  const [paid, setPaid] = useState(String(emi.paid_months));
-  const [total, setTotal] = useState(String(emi.total_months));
-
-  async function save() {
-    setSaving(true);
-    try {
-      await api.updateObligation(emi.id, {
-        name,
-        lender,
-        amount: Number(amount),
-        completed_installments: Number(paid),
-        total_installments: Number(total),
-      });
-      setEditing(false);
-      onRefetch();
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <EditableRow editing={editing} onStartEdit={() => setEditing(true)}
-      form={
-        <>
-          <IGrid>
-            <IField label="Name">
-              <input className={iCls} value={name} onChange={e => setName(e.target.value)} />
-            </IField>
-            <IField label="Lender">
-              <input className={iCls} value={lender} onChange={e => setLender(e.target.value)} />
-            </IField>
-          </IGrid>
-          <IGrid>
-            <IField label="Monthly EMI (₹)">
-              <input className={iCls} type="number" value={amount} onChange={e => setAmount(e.target.value)} />
-            </IField>
-            <IField label="Months Paid">
-              <input className={iCls} type="number" value={paid} onChange={e => setPaid(e.target.value)} />
-            </IField>
-          </IGrid>
-          <IField label="Total Months">
-            <input className={iCls} type="number" value={total} onChange={e => setTotal(e.target.value)} />
-          </IField>
-          <ISaveCancel saving={saving} onSave={save} onCancel={() => setEditing(false)} />
-        </>
-      }
-    >
-      <div className="flex items-center justify-between py-1 border-l border-zinc-700/50 pl-3 pr-8">
-        <div>
-          <p className="text-xs text-zinc-300">{emi.name}</p>
-          <p className="text-xs text-zinc-600">{emi.lender} · {emi.paid_months}/{emi.total_months} mo</p>
-        </div>
-        <span className="font-mono text-xs text-zinc-400">{formatINR(emi.amount)}</span>
-      </div>
-    </EditableRow>
-  );
-}
-
-export function MonthlyBurnCard({ subscriptions, emis, cards, monthlyBurn, monthlyBurnTrendPct, onRefetch }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  // Use ledger-derived total if available, fall back to computed
   const subTotal  = subscriptions.reduce((s, x) => s + x.amount, 0);
   const emiTotal  = emis.reduce((s, x) => s + x.amount, 0);
   const cardTotal = cards.reduce((s, x) => s + x.minimum_due, 0);
-  const localTotal = subTotal + emiTotal + cardTotal;
-  const total = monthlyBurn ?? localTotal;
+  const obligationTotal = subTotal + emiTotal + cardTotal;
 
-  // For bar proportions use local breakdown (ledger total may differ from obligation total)
-  const barBase = Math.max(localTotal, 1);
+  const actual    = monthlyBurn ?? obligationTotal;
+  const baseline  = monthlyBurnBaseline ?? obligationTotal;
+  const projected = monthlyBurnProjected ?? actual;
 
-  const sections = [
-    { label: "Subscriptions", amount: subTotal, bar: "bg-violet-500", count: subscriptions.length },
-    { label: "EMIs",          amount: emiTotal, bar: "bg-blue-500",   count: emis.length },
-    { label: "Card Min Dues", amount: cardTotal, bar: "bg-emerald-500", count: cards.length },
-  ];
+  const progress = baseline > 0 ? Math.min(actual / baseline, 1.5) : 0;
+  const overBudget = progress > 1;
 
-  const isLedgerDerived = monthlyBurn !== undefined;
+  const sections = useMemo(() => [
+    { key: "Subscriptions", amount: subTotal,  count: subscriptions.length },
+    { key: "EMIs",          amount: emiTotal,  count: emis.length },
+    { key: "Card mins",     amount: cardTotal, count: cards.length },
+  ], [subTotal, emiTotal, cardTotal, subscriptions.length, emis.length, cards.length]);
+
+  const barBase = Math.max(obligationTotal, 1);
 
   return (
-    <div className="bg-zinc-900 p-6 flex flex-col gap-4 backdrop-blur-sm">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-zinc-400 text-sm font-medium">
-          <Flame size={16} className="text-violet-400" />
-          Monthly Burn
+    <Card className="flex flex-col gap-4" onHide={onHide}>
+      <CardHeader>
+        <CardTitle icon={<Flame size={14} />}>This month</CardTitle>
+        <div className="flex items-center gap-3">
+          {monthlyBurnTrendPct !== null && monthlyBurnTrendPct !== undefined && (
+            <span className={cn(
+              "flex items-center gap-1 text-xs font-medium num",
+              monthlyBurnTrendPct > 0 ? "text-red-400" : "text-emerald-400",
+            )}>
+              {monthlyBurnTrendPct > 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+              {pct(monthlyBurnTrendPct).replace(/^\+?/, monthlyBurnTrendPct > 0 ? "+" : "")} vs prior
+            </span>
+          )}
+          <CardAction onClick={() => { setEditing(v => !v); setExpanded(null); }} className="inline-flex items-center gap-1">
+            <Pencil size={11} /> {editing ? "Done" : "Edit"}
+          </CardAction>
         </div>
-        {monthlyBurnTrendPct !== null && monthlyBurnTrendPct !== undefined && (
-          <span className={`flex items-center gap-0.5 text-xs font-mono font-medium ${monthlyBurnTrendPct > 0 ? "text-red-400" : "text-emerald-400"}`}>
-            {monthlyBurnTrendPct > 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-            {monthlyBurnTrendPct > 0 ? "+" : ""}{monthlyBurnTrendPct}% vs last month
-          </span>
-        )}
+      </CardHeader>
+
+      <div className="flex items-end justify-between gap-4">
+        <Stat label="Spent" value={actual} size="hero" tone={overBudget ? "bad" : "neutral"} />
+        <div className="flex flex-col items-end gap-2 pb-1">
+          <Stat label="Baseline"  value={baseline}  size="sm" format="compact" align="right" />
+          <Stat label="Projected" value={projected} size="sm" format="compact" align="right"
+                tone={projected > baseline * 1.05 ? "bad" : "neutral"} />
+        </div>
       </div>
-      <div className="font-mono text-4xl font-bold text-white tracking-tight">{formatINR(total)}</div>
-      <div className="flex h-2 rounded-full overflow-hidden gap-0.5">
-        {sections.map(s => (
-          <div key={s.label} className={`${s.bar} transition-all`} style={{ width: localTotal > 0 ? `${(s.amount / barBase) * 100}%` : "0%" }} />
-        ))}
-      </div>
+
       <div className="flex flex-col gap-1">
-        {sections.map(s => (
-          <div key={s.label}>
-            <button onClick={() => setExpanded(expanded === s.label ? null : s.label)} className="w-full flex items-center justify-between py-1.5 group">
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${s.bar}`} />
-                <span className="text-sm text-zinc-400 group-hover:text-zinc-200 transition-colors">
-                  {s.label} <span className="text-zinc-600 text-xs">({s.count})</span>
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-sm text-zinc-200">{formatINR(s.amount)}</span>
-                {s.count > 0 && (expanded === s.label ? <ChevronUp size={13} className="text-zinc-500" /> : <ChevronDown size={13} className="text-zinc-500" />)}
-              </div>
-            </button>
-            {expanded === s.label && (
-              <div className="ml-4 flex flex-col gap-0.5 pb-1">
-                {s.label === "Subscriptions" && subscriptions.map(sub => <SubRow key={sub.id} sub={sub} onRefetch={onRefetch} />)}
-                {s.label === "EMIs"          && emis.map(emi => <EmiRow key={emi.id} emi={emi} onRefetch={onRefetch} />)}
-                {s.label === "Card Min Dues" && cards.map(c => (
-                  <div key={c.id} className="flex items-center justify-between py-1 border-l border-zinc-700/50 pl-3">
-                    <p className="text-xs text-zinc-300">{c.last4 ? `${c.name} ···· ${c.last4}` : c.name}</p>
-                    <span className="font-mono text-xs text-zinc-400">{formatINR(c.minimum_due)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
+        <div className="h-2 rounded-full bg-zinc-800/80 overflow-hidden">
+          <div
+            className={cn("h-full rounded-full transition-[width]", overBudget ? "bg-red-500" : "bg-violet-500")}
+            style={{ width: `${Math.min(progress * 100, 100)}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-[11px] text-zinc-500 num">
+          <span>{Math.round(progress * 100)}% of baseline</span>
+          <span>{inrCompact(baseline)}</span>
+        </div>
       </div>
-      {isLedgerDerived && Math.abs(total - localTotal) > 1 && (
-        <p className="text-xs text-zinc-600 italic">
-          Ledger total ({formatINR(total)}) differs from obligation total ({formatINR(localTotal)}) — ledger includes all posted debits.
-        </p>
-      )}
-    </div>
+
+      <CardDivider />
+
+      <div className="flex flex-col gap-2">
+        <div className="flex h-1.5 rounded-full overflow-hidden gap-px">
+          {sections.map(s => (
+            <div
+              key={s.key}
+              className={SECTION_DOT[s.key as keyof typeof SECTION_DOT]}
+              style={{ width: `${(s.amount / barBase) * 100}%`, minWidth: s.amount > 0 ? 2 : 0 }}
+              title={`${s.key}: ${inrCompact(s.amount)}`}
+            />
+          ))}
+        </div>
+
+        {sections.map(s => {
+          const isOpen = expanded === s.key;
+          const showEditList = editing && (s.key === "Subscriptions" || s.key === "EMIs");
+          return (
+            <div key={s.key}>
+              <button
+                onClick={() => setExpanded(isOpen ? null : s.key)}
+                className="w-full -mx-2 px-2 py-1.5 rounded-md flex items-center gap-3 hover:bg-zinc-800/30 transition-colors"
+              >
+                <span className={cn("h-2 w-2 rounded-full shrink-0", SECTION_DOT[s.key as keyof typeof SECTION_DOT])} />
+                <span className="text-sm text-zinc-300 flex-1 text-left">
+                  {s.key} <span className="text-zinc-600 ml-1 text-xs num">·{s.count}</span>
+                </span>
+                <span className="num text-sm text-zinc-200">{inrCompact(s.amount)}</span>
+                {(s.count > 0 || showEditList) && (
+                  isOpen ? <ChevronUp size={13} className="text-zinc-600 shrink-0" />
+                         : <ChevronDown size={13} className="text-zinc-600 shrink-0" />
+                )}
+              </button>
+
+              {isOpen && (
+                <div className="ml-5 mt-0.5 mb-2 pl-2 border-l border-zinc-800 flex flex-col">
+                  {s.key === "Subscriptions" && (
+                    showEditList ? (
+                      <EditList<Subscription>
+                        items={subscriptions}
+                        getKey={x => x.id}
+                        addLabel="Add subscription"
+                        emptyDraft={() => ({ name: "", amount: 0, billing_cycle: "monthly", due_day: 1, category: "Other" })}
+                        onSave={async (draft, original) => {
+                          if (original) {
+                            await api.updateObligation(original.id, {
+                              name: draft.name, amount: Number(draft.amount),
+                              due_day: Number(draft.due_day), frequency: draft.billing_cycle as any,
+                              category: draft.category,
+                            });
+                          } else {
+                            await api.createObligation({
+                              type: "subscription", name: draft.name, amount: Number(draft.amount),
+                              due_day: Number(draft.due_day), frequency: draft.billing_cycle as any,
+                              category: draft.category,
+                            } as any);
+                          }
+                          onRefetch();
+                        }}
+                        onDelete={async (sub) => { await api.deleteObligation(sub.id); onRefetch(); }}
+                        renderView={sub => (
+                          <Row
+                            label={
+                              <span className="flex flex-col">
+                                <span className="text-sm">{sub.name}</span>
+                                <span className="text-[10px] text-zinc-600">{sub.billing_cycle} · {sub.category}</span>
+                              </span>
+                            }
+                            value={inrCompact(sub.amount)}
+                          />
+                        )}
+                        renderEditForm={(d, set) => (
+                          <>
+                            <Field label="Name">
+                              <input className={inputCls} value={d.name ?? ""} onChange={e => set({ ...d, name: e.target.value })} />
+                            </Field>
+                            <FieldGrid>
+                              <Field label="Amount (₹)">
+                                <input className={inputCls} type="number" value={String(d.amount ?? 0)}
+                                       onChange={e => set({ ...d, amount: Number(e.target.value) })} />
+                              </Field>
+                              <Field label="Billing">
+                                <select className={inputCls} value={d.billing_cycle ?? "monthly"}
+                                        onChange={e => set({ ...d, billing_cycle: e.target.value as any })}>
+                                  <option value="monthly">Monthly</option>
+                                  <option value="yearly">Yearly</option>
+                                  <option value="weekly">Weekly</option>
+                                </select>
+                              </Field>
+                              <Field label="Due day">
+                                <input className={inputCls} type="number" min={1} max={31} value={String(d.due_day ?? 1)}
+                                       onChange={e => set({ ...d, due_day: Number(e.target.value) })} />
+                              </Field>
+                              <Field label="Category">
+                                <input className={inputCls} value={d.category ?? ""}
+                                       onChange={e => set({ ...d, category: e.target.value })} />
+                              </Field>
+                            </FieldGrid>
+                          </>
+                        )}
+                      />
+                    ) : (
+                      subscriptions.map(sub => (
+                        <Row key={sub.id}
+                          label={
+                            <span className="flex flex-col">
+                              <span className="text-sm">{sub.name}</span>
+                              <span className="text-[10px] text-zinc-600">{sub.billing_cycle} · {sub.category}</span>
+                            </span>
+                          }
+                          value={inrCompact(sub.amount)}
+                        />
+                      ))
+                    )
+                  )}
+
+                  {s.key === "EMIs" && (
+                    showEditList ? (
+                      <EditList<EMI>
+                        items={emis}
+                        getKey={x => x.id}
+                        addLabel="Add EMI"
+                        emptyDraft={() => ({ name: "", lender: "", amount: 0, total_months: 12, paid_months: 0, due_day: 1 })}
+                        onSave={async (draft, original) => {
+                          if (original) {
+                            await api.updateObligation(original.id, {
+                              name: draft.name, lender: draft.lender as any, amount: Number(draft.amount),
+                              total_installments: Number(draft.total_months),
+                              completed_installments: Number(draft.paid_months),
+                              due_day: Number(draft.due_day),
+                            } as any);
+                          } else {
+                            await api.createObligation({
+                              type: "emi", name: draft.name, lender: draft.lender,
+                              amount: Number(draft.amount),
+                              total_installments: Number(draft.total_months),
+                              completed_installments: Number(draft.paid_months ?? 0),
+                              due_day: Number(draft.due_day),
+                            } as any);
+                          }
+                          onRefetch();
+                        }}
+                        onDelete={async (emi) => { await api.deleteObligation(emi.id); onRefetch(); }}
+                        renderView={emi => (
+                          <Row
+                            label={
+                              <span className="flex flex-col">
+                                <span className="text-sm">{emi.name}</span>
+                                <span className="text-[10px] text-zinc-600 num">
+                                  {emi.lender} · {emi.paid_months}/{emi.total_months}
+                                </span>
+                              </span>
+                            }
+                            value={inrCompact(emi.amount)}
+                          />
+                        )}
+                        renderEditForm={(d, set) => (
+                          <>
+                            <FieldGrid>
+                              <Field label="Name">
+                                <input className={inputCls} value={d.name ?? ""} onChange={e => set({ ...d, name: e.target.value })} />
+                              </Field>
+                              <Field label="Lender">
+                                <input className={inputCls} value={d.lender ?? ""} onChange={e => set({ ...d, lender: e.target.value })} />
+                              </Field>
+                              <Field label="Monthly EMI (₹)">
+                                <input className={inputCls} type="number" value={String(d.amount ?? 0)}
+                                       onChange={e => set({ ...d, amount: Number(e.target.value) })} />
+                              </Field>
+                              <Field label="Due day">
+                                <input className={inputCls} type="number" min={1} max={31}
+                                       value={String(d.due_day ?? 1)} onChange={e => set({ ...d, due_day: Number(e.target.value) })} />
+                              </Field>
+                              <Field label="Months paid">
+                                <input className={inputCls} type="number" value={String(d.paid_months ?? 0)}
+                                       onChange={e => set({ ...d, paid_months: Number(e.target.value) })} />
+                              </Field>
+                              <Field label="Total months">
+                                <input className={inputCls} type="number" value={String(d.total_months ?? 12)}
+                                       onChange={e => set({ ...d, total_months: Number(e.target.value) })} />
+                              </Field>
+                            </FieldGrid>
+                          </>
+                        )}
+                      />
+                    ) : (
+                      emis.map(emi => (
+                        <Row key={emi.id}
+                          label={
+                            <span className="flex flex-col">
+                              <span className="text-sm">{emi.name}</span>
+                              <span className="text-[10px] text-zinc-600 num">
+                                {emi.lender} · {emi.paid_months}/{emi.total_months}
+                              </span>
+                            </span>
+                          }
+                          value={inrCompact(emi.amount)}
+                        />
+                      ))
+                    )
+                  )}
+
+                  {s.key === "Card mins" && cards.map(c => (
+                    <Row key={c.id}
+                      label={
+                        <span className="flex flex-col">
+                          <span className="text-sm">{c.name}</span>
+                          {c.last4 && <span className="text-[10px] text-zinc-600 num">···· {c.last4}</span>}
+                        </span>
+                      }
+                      value={inrCompact(c.minimum_due)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }

@@ -82,13 +82,16 @@ def _run(user_id: str) -> dict:
     for acc in liquid_accounts:
         acc["live_balance"] = float(ledger.get_balance(acc["id"]))
 
-    # 2. Open billing cycles (credit card dues)
+    # 2. Open billing cycles (credit card dues), enriched with APR for
+    #    interest-aware ordering.  Default APR = 36% (Indian CC average) when
+    #    the column is missing or NULL.
     open_cycles = fetchall(
         """
         SELECT bc.id, bc.account_id, bc.due_date, bc.total_billed,
                bc.minimum_due, bc.total_paid, bc.balance_due,
                fa.name AS card_name, fa.institution AS bank,
-               ext.last4, ext.credit_limit
+               ext.last4, ext.credit_limit,
+               COALESCE(ext.apr, 36.0) AS apr
         FROM billing_cycles bc
         JOIN financial_accounts fa ON bc.account_id = fa.id
         LEFT JOIN account_cc_ext ext ON fa.id = ext.account_id
@@ -153,7 +156,7 @@ def _allocate(
     capex_items: list,
 ) -> dict:
     # Working copy of balances
-    working: dict[str, Decimal] = {
+    working: "dict[str, Decimal]" = {
         acc["id"]: Decimal(str(acc["live_balance"]))
         for acc in liquid_accounts
     }
@@ -165,7 +168,7 @@ def _allocate(
         o for o in upcoming_obligations
         if _days_until(o["due_date"]) <= 7
     ]
-    reserved: dict[str, Decimal] = {}  # obligation_id → amount reserved from best account
+    reserved: "dict[str, Decimal]" = {}  # obligation_id → amount reserved from best account
     for obl in obligations_due_7d:
         need = Decimal(str(obl["balance_due"]))
         src = _find_best_source("", liquid_accounts, working, need)
@@ -180,57 +183,105 @@ def _allocate(
         for acc in liquid_accounts
     }
 
-    # Allocate to credit card dues
-    allocations = []
+    # APR-aware two-pass allocation:
+    #   Pass 1 — cover minimum_due on every cycle (avoid late fees + APR cascade)
+    #            in due-date order; ties broken by highest APR.
+    #   Pass 2 — allocate remaining cash to balances by highest expected interest
+    #            saved (balance × APR), so each rupee paid kills the most interest.
     total_cc_outstanding = Decimal("0")
-    total_cc_minimum = Decimal("0")
-
+    total_cc_minimum     = Decimal("0")
+    state: "dict[str, dict]" = {}
     for cycle in open_cycles:
         balance_due = Decimal(str(cycle["balance_due"]))
         minimum_due = Decimal(str(cycle["minimum_due"]))
         total_cc_outstanding += balance_due
-        total_cc_minimum += minimum_due
-
+        total_cc_minimum     += minimum_due
         if balance_due <= 0:
             continue
+        state[cycle["id"]] = {
+            "cycle":       cycle,
+            "balance_due": balance_due,
+            "minimum_due": minimum_due,
+            "remaining":   balance_due,
+            "from_account_id":   None,
+            "from_account_name": None,
+            "allocatable":       Decimal("0"),
+        }
 
-        src = _find_best_source(cycle.get("bank", ""), liquid_accounts, working, balance_due)
-        if not src:
-            allocations.append({
-                "billing_cycle_id": cycle["id"],
-                "card_name": cycle["card_name"],
-                "bank": cycle.get("bank"),
-                "last4": cycle.get("last4"),
-                "due_date": cycle["due_date"],
-                "balance_due": float(balance_due),
-                "minimum_due": float(minimum_due),
-                "from_account_id": None,
-                "from_account_name": None,
-                "allocatable": 0.0,
-                "can_pay_full": False,
-                "can_pay_minimum": False,
-                "shortfall": float(balance_due),
-            })
+    # Pass 1 — minimum due in due-date order, then highest APR for tie-breaks.
+    pass1_order = sorted(
+        state.values(),
+        key=lambda s: (s["cycle"]["due_date"], -float(s["cycle"].get("apr") or 0)),
+    )
+    for slot in pass1_order:
+        need = min(slot["minimum_due"], slot["remaining"])
+        if need <= 0:
             continue
+        src = _find_best_source(slot["cycle"].get("bank", ""), liquid_accounts, working, need)
+        if not src:
+            continue
+        give = min(working[src], need)
+        if give <= 0:
+            continue
+        working[src] -= give
+        slot["remaining"]   -= give
+        slot["allocatable"] += give
+        slot["from_account_id"]   = src
+        slot["from_account_name"] = next(a["name"] for a in liquid_accounts if a["id"] == src)
 
-        available = working[src]
-        allocatable = min(available, balance_due)
-        working[src] -= allocatable
+    # Pass 2 — remaining cash to whichever cycle has the most interest left to
+    # accrue, i.e. balance_remaining × APR.  Greedy is fine here: pay the worst
+    # one down first, then re-evaluate.
+    while True:
+        candidates = [s for s in state.values() if s["remaining"] > 0]
+        if not candidates:
+            break
+        candidates.sort(
+            key=lambda s: float(s["remaining"]) * float(s["cycle"].get("apr") or 0),
+            reverse=True,
+        )
+        slot = candidates[0]
+        src  = _find_best_source(slot["cycle"].get("bank", ""), liquid_accounts, working, slot["remaining"])
+        if not src or working[src] <= 0:
+            break
+        give = min(working[src], slot["remaining"])
+        if give <= 0:
+            break
+        working[src] -= give
+        slot["remaining"]   -= give
+        slot["allocatable"] += give
+        if slot["from_account_id"] is None:
+            slot["from_account_id"]   = src
+            slot["from_account_name"] = next(a["name"] for a in liquid_accounts if a["id"] == src)
 
+    # Materialize allocations in the original (due-date) order.
+    allocations = []
+    for cycle in open_cycles:
+        slot = state.get(cycle["id"])
+        if not slot:
+            continue
+        balance_due  = slot["balance_due"]
+        minimum_due  = slot["minimum_due"]
+        allocatable  = slot["allocatable"]
+        apr_pct      = float(cycle.get("apr") or 0)
+        # Interest avoided per month if user pays this `allocatable` now vs later.
+        interest_saved_monthly = float(allocatable) * apr_pct / 12.0 / 100.0
         allocations.append({
-            "billing_cycle_id": cycle["id"],
-            "card_name": cycle["card_name"],
-            "bank": cycle.get("bank"),
-            "last4": cycle.get("last4"),
-            "due_date": cycle["due_date"],
-            "balance_due": float(balance_due),
-            "minimum_due": float(minimum_due),
-            "from_account_id": src,
-            "from_account_name": next(a["name"] for a in liquid_accounts if a["id"] == src),
-            "allocatable": float(allocatable),
-            "can_pay_full": allocatable >= balance_due,
-            "can_pay_minimum": allocatable >= minimum_due,
-            "shortfall": float(max(0, balance_due - allocatable)),
+            "billing_cycle_id":     cycle["id"],
+            "card_name":            cycle["card_name"],
+            "bank":                 cycle.get("bank"),
+            "last4":                cycle.get("last4"),
+            "due_date":             cycle["due_date"],
+            "apr":                  apr_pct,
+            "balance_due":          float(balance_due),
+            "minimum_due":          float(minimum_due),
+            "from_account_id":      slot["from_account_id"],
+            "from_account_name":    slot["from_account_name"],
+            "allocatable":          float(allocatable),
+            "can_pay_full":         allocatable >= balance_due,
+            "can_pay_minimum":      allocatable >= minimum_due,
+            "shortfall":            float(max(Decimal("0"), balance_due - allocatable)),
+            "interest_saved_monthly": round(interest_saved_monthly, 2),
         })
 
     # Post-allocation balances

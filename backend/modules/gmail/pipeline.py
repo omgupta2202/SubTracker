@@ -26,6 +26,9 @@ from db import fetchall, fetchone, execute, execute_void
 
 from modules.gmail import service as gmail_svc
 from services import ledger
+from services import credit_card_cycles as cc_cycles
+from services.allocation_engine import invalidate as invalidate_allocation
+from services.categorization import infer_category
 
 PARSER_VERSION = "2.0"
 
@@ -118,6 +121,29 @@ def run_sync(user_id: str) -> dict:
         raise
     except Exception as exc:
         stats["errors"].append({"stage": "fetch", "message": str(exc)})
+
+    # Auto-close any past billing cycles surfaced by this sync, and
+    # invalidate the allocation cache so the next dashboard read is fresh.
+    try:
+        for c in fetchall(
+            """
+            SELECT id FROM financial_accounts
+            WHERE user_id=%s AND kind='credit_card'
+              AND is_active=TRUE AND deleted_at IS NULL
+            """,
+            (user_id,),
+        ):
+            try:
+                cc_cycles.auto_rollover(c["id"], user_id)
+            except Exception as exc:
+                stats["errors"].append({
+                    "stage": "auto_rollover",
+                    "account_id": c["id"],
+                    "message": str(exc),
+                })
+        invalidate_allocation(user_id)
+    except Exception as exc:
+        stats["errors"].append({"stage": "post_sync", "message": str(exc)})
 
     # Finalize job
     job_status = (
@@ -354,6 +380,11 @@ def _stage_commit(
     account_id = validation["matched_account_id"]
 
     if parsed["email_type"] == "transaction":
+        category = infer_category(
+            merchant=parsed.get("merchant"),
+            description=raw.get("subject"),
+            user_id=user_id,
+        )
         entry = ledger.post_entry(
             user_id=user_id,
             account_id=account_id,
@@ -361,7 +392,7 @@ def _stage_commit(
             amount=Decimal(str(parsed["amount"])),
             description=parsed.get("merchant") or raw.get("subject") or "Card transaction",
             effective_date=_parse_date_safe(parsed.get("txn_date")),
-            category="card_spend",
+            category=category,
             merchant=parsed.get("merchant"),
             source="gmail",
             external_ref_id=raw["gmail_message_id"],

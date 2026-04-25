@@ -63,17 +63,30 @@ export interface Rent {
 }
 
 export interface SmartAllocationRow {
-  card_id: string;
-  card_name: string;
-  bank: string;
-  outstanding: number;
-  minimum_due: number;
-  due_day: number;
-  days_until_due: number;
-  source_account_id: string | null;
-  source_account_name: string | null;
-  source_bank: string | null;
-  covered: boolean;
+  // Modern fields (post-Phase-3 ledger allocation)
+  card?: string;
+  card_name?: string;
+  card_id?: string;
+  bank?: string;
+  amount?: number;
+  allocatable?: number;
+  balance_due?: number;
+  pay_from?: string;
+  from_account_name?: string | null;
+  due_date?: string;
+  days_left?: number;
+  feasible?: boolean;
+  apr?: number;
+  interest_saved_monthly?: number;
+  // Legacy fields kept for compat
+  outstanding?: number;
+  minimum_due?: number;
+  due_day?: number;
+  days_until_due?: number;
+  source_account_id?: string | null;
+  source_account_name?: string | null;
+  source_bank?: string | null;
+  covered?: boolean;
 }
 
 export interface SmartAllocationSummary {
