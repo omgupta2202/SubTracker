@@ -358,16 +358,24 @@ export const getBillingCycle = (cycleId: string) =>
     `/billing-cycles/${cycleId}`,
   );
 
-// ── Email reminders ───────────────────────────────────────────────────────
-export interface ReminderPrefs {
+// ── Email preferences ─────────────────────────────────────────────────────
+export interface EmailPrefs {
   reminders_enabled: boolean;
   reminders_horizon_days: number;
   reminders_last_sent_at: string | null;
+  invite_emails_enabled: boolean;
 }
-export const getReminderPrefs = () =>
-  request<ReminderPrefs>("/reminders/preferences");
-export const updateReminderPrefs = (d: Partial<Pick<ReminderPrefs, "reminders_enabled" | "reminders_horizon_days">>) =>
-  request<ReminderPrefs>("/reminders/preferences", { method: "PUT", body: JSON.stringify(d) });
+/** Back-compat alias — older callers use `ReminderPrefs`. */
+export type ReminderPrefs = EmailPrefs;
+export const getEmailPrefs = () =>
+  request<EmailPrefs>("/reminders/preferences");
+export const updateEmailPrefs = (
+  d: Partial<Pick<EmailPrefs, "reminders_enabled" | "reminders_horizon_days" | "invite_emails_enabled">>,
+) =>
+  request<EmailPrefs>("/reminders/preferences", { method: "PUT", body: JSON.stringify(d) });
+// Legacy aliases used by older components.
+export const getReminderPrefs    = getEmailPrefs;
+export const updateReminderPrefs = updateEmailPrefs;
 export const sendTestReminder = () =>
   request<{ sent: boolean }>("/reminders/test", { method: "POST" });
 
@@ -378,203 +386,10 @@ export const snoozeAttention = (item_key: string, days: number = 3) =>
     { method: "POST", body: JSON.stringify({ item_key, days }) },
   );
 
-// ── Trackers ─────────────────────────────────────────────────────────────────
-export interface TrackerSummary {
-  id: string;
-  creator_id: string;
-  name: string;
-  start_date: string | null;
-  end_date: string | null;
-  currency: string;
-  status: "active" | "settled" | "archived";
-  note: string | null;
-  created_at: string;
-  /** Aggregates added by the enriched list endpoint so the list view can
-   *  render summary tiles without a per-row detail fetch. */
-  total_spent?: number;
-  expenses_count?: number;
-  members_count?: number;
-  /** Net balance for the current viewer in this tracker (paid − share).
-   *  Positive = they're owed; negative = they owe. NULL if the viewer
-   *  isn't a member (only possible for creator-of-empty-tracker edge case). */
-  my_balance?: number | null;
-}
-export interface TrackerMember {
-  id: string;
-  tracker_id: string;
-  email: string;
-  display_name: string;
-  user_id: string | null;
-  invite_status: "pending" | "joined" | "creator";
-  invite_token: string | null;
-  upi_id: string | null;
-  invited_at: string;
-  joined_at: string | null;
-}
-export interface TrackerExpenseSplit {
-  member_id: string;
-  share: number;
-}
-/** Multi-payer support — who put in money for this expense. Sum equals amount. */
-export interface TrackerExpensePayment {
-  member_id: string;
-  amount: number;
-}
-export interface TrackerCategory {
-  id: string;
-  tracker_id: string;
-  name: string;
-  /** Palette token; the frontend maps it to a tailwind class. */
-  color: "violet" | "fuchsia" | "emerald" | "amber" | "sky" | "rose" | "lime" | "orange" | "zinc";
-  position: number;
-  created_at: string;
-}
-export interface TrackerExpense {
-  id: string;
-  tracker_id: string;
-  payer_id: string;          // primary/largest payer (legacy single-payer column)
-  description: string;
-  amount: number;
-  currency: string;
-  expense_date: string;
-  split_kind: "equal" | "custom";
-  note: string | null;
-  category_id: string | null;
-  created_at: string;
-  splits: TrackerExpenseSplit[];
-  payments: TrackerExpensePayment[];
-}
-export interface TrackerBalance {
-  member_id: string;
-  display_name: string;
-  paid: number;
-  owed: number;
-  net: number;
-}
-export interface TrackerDetail extends TrackerSummary {
-  members: TrackerMember[];
-  expenses: TrackerExpense[];
-  balances: TrackerBalance[];
-  /** Categories defined for this tracker. Optional on legacy responses
-   *  served before the tracker_categories migration was applied. */
-  categories?: TrackerCategory[];
-}
-export interface TrackerTransfer {
-  from_member_id: string;
-  from_display_name: string;
-  to_member_id: string;
-  to_display_name: string;
-  to_upi_id: string | null;
-  amount: number;
-}
-export interface TrackerSettlement {
-  balances: TrackerBalance[];
-  transfers: TrackerTransfer[];
-}
-
-export const listTrackers     = ()        => request<TrackerSummary[]>("/trackers/");
-export const createTracker    = (d: { name: string; start_date?: string; end_date?: string; note?: string }) =>
-  request<TrackerDetail>("/trackers/", { method: "POST", body: JSON.stringify(d) });
-export const getTracker       = (id: string) => request<TrackerDetail>(`/trackers/${id}`);
-export const updateTracker    = (id: string, d: Partial<Pick<TrackerSummary, "name" | "start_date" | "end_date" | "note" | "status">>) =>
-  request<TrackerDetail>(`/trackers/${id}`, { method: "PUT", body: JSON.stringify(d) });
-export const deleteTracker    = (id: string) =>
-  request<{ deleted: boolean }>(`/trackers/${id}`, { method: "DELETE" });
-export const inviteTrackerMember = (id: string, d: { email: string; display_name: string }) =>
-  request<TrackerMember>(`/trackers/${id}/members`, { method: "POST", body: JSON.stringify(d) });
-export const removeTrackerMember = (id: string, memberId: string) =>
-  request<{ deleted: boolean }>(`/trackers/${id}/members/${memberId}`, { method: "DELETE" });
-export const resendTrackerInvite = (id: string, memberId: string) =>
-  request<TrackerMember>(`/trackers/${id}/members/${memberId}/resend-invite`, { method: "POST" });
-export const addTrackerExpense = (
-  id: string,
-  d: {
-    payer_id: string;
-    description: string;
-    amount: number;
-    expense_date?: string;
-    split_kind?: "equal" | "custom";
-    splits?: TrackerExpenseSplit[];
-    /** When provided, expense is multi-payer; sum must equal amount. */
-    payments?: TrackerExpensePayment[];
-    note?: string;
-    category_id?: string | null;
-  },
-) => request<TrackerExpense>(`/trackers/${id}/expenses`, { method: "POST", body: JSON.stringify(d) });
-export const listTrackerCategories  = (id: string) =>
-  request<TrackerCategory[]>(`/trackers/${id}/categories`);
-export const createTrackerCategory  = (id: string, d: { name: string; color?: TrackerCategory["color"] }) =>
-  request<TrackerCategory>(`/trackers/${id}/categories`, { method: "POST", body: JSON.stringify(d) });
-export const updateTrackerCategory  = (id: string, cid: string, d: Partial<Pick<TrackerCategory, "name" | "color" | "position">>) =>
-  request<TrackerCategory>(`/trackers/${id}/categories/${cid}`, { method: "PUT", body: JSON.stringify(d) });
-export const deleteTrackerCategory  = (id: string, cid: string) =>
-  request<{ deleted: boolean }>(`/trackers/${id}/categories/${cid}`, { method: "DELETE" });
-export const guestCreateTrackerCategory = (token: string, d: { name: string; color?: TrackerCategory["color"] }) =>
-  guestRequest<TrackerCategory>(`/trackers/guest/${token}/categories`, { method: "POST", body: JSON.stringify(d) });
-export const updateTrackerExpense = (
-  id: string, eid: string,
-  d: Partial<{
-    payer_id: string;
-    description: string;
-    amount: number;
-    expense_date: string;
-    split_kind: "equal" | "custom";
-    splits: TrackerExpenseSplit[];
-    payments: TrackerExpensePayment[];
-    note: string | null;
-  }>,
-) => request<TrackerExpense>(`/trackers/${id}/expenses/${eid}`, { method: "PUT", body: JSON.stringify(d) });
-export const deleteTrackerExpense = (id: string, eid: string) =>
-  request<{ deleted: boolean }>(`/trackers/${id}/expenses/${eid}`, { method: "DELETE" });
-export const getTrackerSettlement = (id: string) =>
-  request<TrackerSettlement>(`/trackers/${id}/settlement`);
-
-/** Guest endpoints — no JWT, the token IS auth. */
-async function guestRequest<T>(path: string, options?: RequestInit): Promise<T> {
-  const BASE = (import.meta as any).env?.VITE_API_BASE ?? "/api";
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options?.headers as Record<string, string> | undefined),
-    },
-  });
-  const json = await res.json() as { data: T | null; error: string | null };
-  if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
-  return json.data as T;
-}
-export const guestGetTracker = (token: string) =>
-  guestRequest<TrackerDetail & { me: TrackerMember }>(`/trackers/guest/${token}`);
-export const guestAddTrackerExpense = (
-  token: string,
-  d: {
-    payer_id?: string;
-    description: string;
-    amount: number;
-    expense_date?: string;
-    split_kind?: "equal" | "custom";
-    splits?: TrackerExpenseSplit[];
-    payments?: TrackerExpensePayment[];
-    note?: string;
-  },
-) => guestRequest<TrackerExpense>(`/trackers/guest/${token}/expenses`, { method: "POST", body: JSON.stringify(d) });
-export const guestUpdateTrackerExpense = (
-  token: string, eid: string,
-  d: Partial<{
-    payer_id: string;
-    description: string;
-    amount: number;
-    expense_date: string;
-    split_kind: "equal" | "custom";
-    splits: TrackerExpenseSplit[];
-    payments: TrackerExpensePayment[];
-    note: string | null;
-  }>,
-) => guestRequest<TrackerExpense>(`/trackers/guest/${token}/expenses/${eid}`, { method: "PUT", body: JSON.stringify(d) });
-export const guestDeleteTrackerExpense = (token: string, eid: string) =>
-  guestRequest<{ deleted: boolean }>(`/trackers/guest/${token}/expenses/${eid}`, { method: "DELETE" });
-export const guestUpdateMe = (token: string, d: { display_name?: string; upi_id?: string }) =>
-  guestRequest<TrackerMember>(`/trackers/guest/${token}/me`, { method: "PATCH", body: JSON.stringify(d) });
+// Tracker types/endpoints have moved to `@/modules/expense_tracker`. The
+// barrel at modules/expense_tracker/index.ts is the only public surface;
+// importers should use that path so future microservice extraction stays
+// painless.
 
 // ── Obligations (Unified: subscriptions + EMIs + rent) ────────────────────
 export const getObligations = (type?: "subscription" | "emi" | "rent" | "insurance" | "sip" | "utility" | "other") => {

@@ -24,7 +24,8 @@ bp = Blueprint("reminders", __name__, url_prefix="/api/reminders")
 def get_prefs():
     row = fetchone(
         """
-        SELECT reminders_enabled, reminders_horizon_days, reminders_last_sent_at
+        SELECT reminders_enabled, reminders_horizon_days, reminders_last_sent_at,
+               invite_emails_enabled
         FROM users WHERE id=%s
         """,
         (g.user_id,),
@@ -40,6 +41,8 @@ def update_prefs():
     fields = {}
     if "reminders_enabled" in body:
         fields["reminders_enabled"] = bool(body["reminders_enabled"])
+    if "invite_emails_enabled" in body:
+        fields["invite_emails_enabled"] = bool(body["invite_emails_enabled"])
     if "reminders_horizon_days" in body:
         try:
             d = int(body["reminders_horizon_days"])
@@ -57,7 +60,8 @@ def update_prefs():
         f"""
         UPDATE users SET {set_clause}, updated_at=NOW()
         WHERE id=%s
-        RETURNING reminders_enabled, reminders_horizon_days, reminders_last_sent_at
+        RETURNING reminders_enabled, reminders_horizon_days, reminders_last_sent_at,
+                  invite_emails_enabled
         """,
         list(fields.values()) + [g.user_id],
     )

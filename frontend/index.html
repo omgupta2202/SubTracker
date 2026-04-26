@@ -5,7 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#09090b" />
     <meta name="description" content="Personal finance dashboard — subscriptions, EMIs, cards, accounts." />
-    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <!--
+      Modern browsers prefer the SVG icon (sharp at every DPR + dark mode
+      friendly thanks to the gradient). Older clients fall back to the .ico.
+      apple-touch-icon stays raster — iOS doesn't support SVG home-screen icons.
+    -->
+    <link rel="icon" href="/icon-subtracker.svg" type="image/svg+xml" />
+    <link rel="alternate icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />

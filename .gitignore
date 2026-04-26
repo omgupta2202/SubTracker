@@ -1,4 +1,4 @@
-# Python
+# ── Python ────────────────────────────────────────────────────────────────
 backend/venv/
 backend/.venv/
 backend/.env
@@ -8,9 +8,11 @@ backend/*.pyc
 backend/*.pyo
 backend/*.pyd
 backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
 backend/instance/
 
-# Node — frontend
+# ── Node — frontend ───────────────────────────────────────────────────────
 frontend/node_modules/
 frontend/dist/
 frontend/.env
@@ -18,7 +20,7 @@ frontend/.env.local
 frontend/.env.*.local
 frontend/.env.production
 
-# Node — mobile
+# ── Node — mobile (Expo) ──────────────────────────────────────────────────
 mobile/node_modules/
 mobile/.env
 mobile/.env.local
@@ -26,23 +28,38 @@ mobile/dist/
 mobile/.expo/
 mobile/.expo-shared/
 
-# Expo / EAS
+# Expo / EAS native artifacts (generated; not source)
 mobile/android/
 mobile/ios/
 *.aab
 *.apk
 *.ipa
 
-# Editor
+# ── Build caches that should never be committed ───────────────────────────
+# Vite/webpack/Next caches sometimes leak in if a dev tool runs in the
+# project root by mistake. Hard-block them.
+.next/
+**/.next/
+.turbo/
+.parcel-cache/
+.cache/
+.svelte-kit/
+**/dist/
+**/build/
+
+# ── Editors / IDEs ────────────────────────────────────────────────────────
 .DS_Store
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Local Claude Code config (per-machine settings, not for source control)
-.claude/settings.json
-.claude/settings.local.json
+# ── Per-machine tool config (Claude Code, IDE workspaces, generic
+#    settings.json that always seems to be machine-specific) ───────────────
+.claude/
+**/settings.json
+.vscode/settings.json
+.idea/
 
-# OS
+# ── OS ────────────────────────────────────────────────────────────────────
 Thumbs.db

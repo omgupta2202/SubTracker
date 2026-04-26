@@ -4,9 +4,9 @@ import { LoginPage, useAuth } from "@/modules/auth";
 import { GlobalProgress } from "@/components/GlobalProgress";
 import { InertWhenBusy } from "@/components/InertWhenBusy";
 import { PWAInstallPrompt } from "@/components/PWAInstallPrompt";
-import { ExpenseTrackerGuestRoute } from "@/components/ExpenseTrackerGuestRoute";
-import { ExpenseTrackerApp } from "@/components/ExpenseTrackerApp";
-import { useRoute, matchGuestTrackerToken, matchTrackersRoute, navigate } from "@/lib/router";
+import { ExpenseTrackerApp, ExpenseTrackerGuestRoute } from "@/modules/expense_tracker";
+import { EmailSettingsPage } from "@/components/EmailSettingsPage";
+import { useRoute, matchGuestTrackerToken, matchTrackersRoute, matchSettingsRoute, navigate } from "@/lib/router";
 
 /**
  * Top-level URL routing.
@@ -22,6 +22,7 @@ export default function App() {
   const path = useRoute();
   const guestToken = matchGuestTrackerToken(path);
   const trackersMatch = matchTrackersRoute(path);
+  const settingsSection = matchSettingsRoute(path);
   const { user, loading } = useAuth();
 
   // Track which "app" the user is in so a bare `/` revisit lands them
@@ -68,16 +69,18 @@ export default function App() {
     <>
       <GlobalProgress />
       <InertWhenBusy>
-        {trackersMatch
-          ? <ExpenseTrackerApp
-              standalone
-              initialTrackerId={trackersMatch.trackerId}
-              onClose={() => {
-                localStorage.setItem(LAST_APP_KEY, "dashboard");
-                navigate("/");
-              }}
-            />
-          : <Dashboard />}
+        {settingsSection === "email"
+          ? <EmailSettingsPage />
+          : trackersMatch
+            ? <ExpenseTrackerApp
+                standalone
+                initialTrackerId={trackersMatch.trackerId}
+                onClose={() => {
+                  localStorage.setItem(LAST_APP_KEY, "dashboard");
+                  navigate("/");
+                }}
+              />
+            : <Dashboard />}
       </InertWhenBusy>
       <PWAInstallPrompt />
     </>

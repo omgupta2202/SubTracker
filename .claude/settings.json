@@ -21,7 +21,14 @@
       "Bash(mv add_trip_categories.sql add_tracker_categories.sql)",
       "Bash(mv add_trip_expense_payments.sql add_tracker_expense_payments.sql)",
       "Bash(mv add_trips.sql add_trackers.sql)",
-      "Bash(mv rename_trips_to_trackers.sql rename_to_trackers.sql)"
+      "Bash(mv rename_trips_to_trackers.sql rename_to_trackers.sql)",
+      "Bash(grep -n \"{net > 0.01  ? \\\\`+\\\\${inrCompact\\(net\\)} owed\\\\` :\" /Users/omgupta/Desktop/ai_session/subtracker/frontend/src/components/ExpenseTrackerApp.tsx)",
+      "Bash(cat migrations/add_trackers.sql migrations/add_tracker_expense_payments.sql migrations/rename_to_trackers.sql migrations/add_tracker_categories.sql)",
+      "Read(//tmp/**)",
+      "Bash(nvm --version)",
+      "Read(//Users/omgupta/.nvm/versions/**)",
+      "Bash(brew list *)",
+      "Bash(python3 -c \"import json,sys; p=json.load\\(sys.stdin\\); print\\('has engines:', 'engines' in p\\); print\\('current:', p.get\\('engines'\\)\\)\")"
     ]
   }
 }

@@ -236,12 +236,16 @@ def _backfill_past_cycles(
         due_date    = stmt_date + timedelta(days=due_offset_days)
 
         # Insert as a CLOSED cycle (statement date is in the past).
+        # `source` is the `txn_source` enum — backfilled rows get tagged
+        # 'system' (the catch-all for app-generated rows). The enum was
+        # never extended with a dedicated 'auto_backfill' value, so using
+        # 'system' avoids InvalidTextRepresentation without a migration.
         execute_void(
             """
             INSERT INTO billing_cycles
               (account_id, user_id, cycle_start, cycle_end, statement_date, due_date,
                total_billed, minimum_due, source, is_closed, closed_at)
-            VALUES (%s,%s,%s,%s,%s,%s, 0, 0, 'auto_backfill', TRUE, NOW())
+            VALUES (%s,%s,%s,%s,%s,%s, 0, 0, 'system', TRUE, NOW())
             ON CONFLICT (account_id, statement_date) DO NOTHING
             """,
             (account_id, user_id, cycle_start, cycle_end, stmt_date, due_date),

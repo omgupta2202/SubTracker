@@ -15,7 +15,7 @@ import {
 } from "@/lib/layoutStore";
 import {
   History, BellRing, SlidersHorizontal,
-  Plus, LogOut, Search, User as UserIcon,
+  Plus, LogOut, Search, User as UserIcon, Mail,
 } from "lucide-react";
 import { useAuth } from "@/modules/auth";
 import { useSubscriptions } from "@/hooks/useSubscriptions";
@@ -39,6 +39,8 @@ import { ReceivablesCard } from "./ReceivablesCard";
 import { CardDetailDrawer } from "./CardDetailDrawer";
 import { AppSwitcher } from "./AppSwitcher";
 import { DashboardPulse } from "./DashboardPulse";
+import { navigate } from "@/lib/router";
+import { SubTrackerIcon } from "@/lib/appIcons";
 import { HistoryPanel } from "./HistoryPanel";
 import { DashboardFilterBar, loadFilters, isFilterActive } from "./DashboardFilterBar";
 import { AttentionSection } from "./AttentionSection";
@@ -215,10 +217,11 @@ export function Dashboard() {
           structured rather than cluttered. */}
       <header className="relative sticky top-0 z-20 backdrop-blur-md bg-zinc-950/85 border-b border-zinc-800/60">
         <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center gap-3">
-          {/* Group 1 — brand */}
-          <div className="flex items-baseline gap-2.5">
+          {/* Group 1 — brand mark + wordmark */}
+          <div className="flex items-center gap-2">
+            <SubTrackerIcon size={26} className="shrink-0 rounded-md shadow-sm shadow-violet-900/30" />
             <h1 className="text-base font-semibold tracking-tight text-zinc-100">SubTracker</h1>
-            <span className="hidden sm:inline text-[11px] text-zinc-500">{monthLabel}</span>
+            <span className="hidden sm:inline text-[11px] text-zinc-500 ml-1">{monthLabel}</span>
           </div>
 
           {/* Group 2 — search (compact) */}
@@ -356,6 +359,9 @@ export function Dashboard() {
           <div className="p-1">
             <MenuItem icon={<UserIcon size={13} />} onClick={() => closeAllPopovers()}>
               Profile
+            </MenuItem>
+            <MenuItem icon={<Mail size={13} />} onClick={() => { closeAllPopovers(); navigate("/settings/email"); }}>
+              Email preferences
             </MenuItem>
             <MenuItem icon={<LogOut size={13} />} onClick={logout} danger>
               Sign out

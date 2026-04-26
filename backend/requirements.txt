@@ -1,7 +1,10 @@
-flask
-flask-cors
-flask-jwt-extended
-psycopg2-binary
-python-dotenv
-google-auth
-requests
+flask>=3.0
+flask-cors>=4.0
+flask-jwt-extended>=4.6
+# 2.9.9 is the first wheel that's published for Python 3.13.
+psycopg2-binary>=2.9.9
+python-dotenv>=1.0
+google-auth>=2.30
+requests>=2.32
+# Optional — used when EMAIL_PROVIDER=resend (see modules/auth/email.py).
+resend>=2.0

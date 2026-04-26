@@ -124,6 +124,7 @@ import { AuthProvider, useAuth, LoginPage } from "@/modules/auth";
 |--------|---------|----------|------|
 | `auth` | `backend/modules/auth/` | `frontend/src/modules/auth/` | `users` table, JWT sessions, Google SSO + email/password |
 | `gmail` | `backend/modules/gmail/` | `frontend/src/modules/gmail/` | Gmail OAuth tokens, `gmail_sync_log` table, email sync |
+| `expense_tracker` | `backend/modules/expense_tracker/` | `frontend/src/modules/expense_tracker/` | `trackers`, `tracker_members`, `tracker_expenses`, `tracker_expense_splits`, `tracker_expense_payments`, `tracker_categories` tables; group expense splitter (formerly "Trips"); designed to be liftable to its own microservice without code changes |
 
 ### Adding a new module
 

@@ -60,3 +60,10 @@ export function matchTrackersRoute(path: string): TrackersRouteMatch | null {
   if (m[1] === "guest") return null;     // /trackers/guest is its own route
   return { trackerId: m[1] };
 }
+
+/** Settings sub-routes (e.g. /settings/email). Returns the section slug
+ *  ("email" / "profile" / …) or null. Lives in the dashboard SPA. */
+export function matchSettingsRoute(path: string): string | null {
+  const m = path.match(/^\/settings\/([^/?#]+)\/?$/);
+  return m ? m[1] : null;
+}

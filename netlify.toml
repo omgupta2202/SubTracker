@@ -8,7 +8,9 @@
 # deployment config, not source. The redirect rule below provides a fallback
 # for any code path that still uses the relative "/api" prefix.
 [build.environment]
-  NODE_VERSION = "20"
+  # Match `engines.node` in frontend/package.json + .nvmrc. Bumped from
+  # 20 → 24 (current LTS) alongside the Python 3.13 deployment runtime.
+  NODE_VERSION = "24"
 
 # When VITE_API_BASE is left as "/api" but the backend lives on a separate
 # host, set BACKEND_URL in Netlify env and Netlify will proxy /api/* to it.

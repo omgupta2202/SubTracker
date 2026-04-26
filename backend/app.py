@@ -57,7 +57,8 @@ from routes.daily_logs         import bp as daily_logs_bp
 from routes.dashboard          import bp as dashboard_bp
 from routes.reminders          import bp as reminders_bp
 from routes.reminder_actions   import bp as reminder_actions_bp
-from routes.expense_tracker    import bp as trackers_bp, guest_bp as trackers_guest_bp
+from routes.unsubscribe        import bp as unsubscribe_bp
+from modules.expense_tracker   import bp as trackers_bp, guest_bp as trackers_guest_bp
 
 # ── Modules ───────────────────────────────────────────────────────────────────
 from modules.auth  import bp as auth_bp
@@ -110,6 +111,7 @@ def create_app() -> Flask:
         dashboard_bp,
         reminders_bp,
         reminder_actions_bp,
+        unsubscribe_bp,
         trackers_bp,
         trackers_guest_bp,
         # Modules
@@ -142,6 +144,9 @@ def create_app() -> Flask:
         if request.path == "/api/reminders/cron":
             return
         # Email action buttons authenticate via the magic-link token in the URL
+        # One-click unsubscribe — token IS auth, no JWT needed
+        if request.path.startswith("/api/unsubscribe/"):
+            return
         if request.path.startswith("/api/reminders/action/"):
             return
         # Tracker guests authenticate via their invite_token in the URL

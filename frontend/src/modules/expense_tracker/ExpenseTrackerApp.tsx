@@ -3,18 +3,22 @@ import { createPortal } from "react-dom";
 import {
   X, Plus, Users, ArrowLeft, ArrowRight, Mail, Trash2, Receipt,
   Sparkles, Check, Loader2, ExternalLink, Copy, Send,
-  Search, Pencil, Download, Settings2, BarChart3, ListChecks,
-  TrendingUp, TrendingDown,
+  Search, Pencil, Download, Upload, Settings2, BarChart3, ListChecks,
+  TrendingUp, TrendingDown, LogOut, BellRing, FileSpreadsheet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { inrCompact, inr, relativeTime, fullTimestamp } from "@/lib/tokens";
 import { navigate } from "@/lib/router";
 import { AppSwitcher } from "@/components/AppSwitcher";
-import * as api from "@/services/api";
+import { ExpenseTrackerIcon } from "@/lib/appIcons";
+import { useAuth } from "@/modules/auth";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip } from "recharts";
+import * as api from "./api";
 import type {
   TrackerSummary, TrackerDetail, TrackerMember, TrackerExpense, TrackerExpenseSplit,
+  TrackerCategory,
   TrackerSettlement, TrackerTransfer,
-} from "@/services/api";
+} from "./api";
 
 /**
  * Full-screen "Expense Tracker" app (formerly "Trackers"). Three views in
@@ -42,6 +46,7 @@ interface Props {
 
 export function ExpenseTrackerApp({ open, standalone = false, initialTrackerId = null, onClose }: Props) {
   const isOpen = standalone || !!open;
+  const { user } = useAuth();
 
   const [view, setView]         = useState<View>(initialTrackerId ? "detail" : "list");
   const [trackers, setTrackers]       = useState<TrackerSummary[]>([]);
@@ -124,7 +129,7 @@ export function ExpenseTrackerApp({ open, standalone = false, initialTrackerId =
               aria-label="Back"
             ><ArrowLeft size={16} /></button>
           )}
-          <Users size={16} className="text-violet-400" />
+          <ExpenseTrackerIcon size={24} className="shrink-0 rounded-md shadow-sm shadow-violet-900/30" />
           <h1 className="text-base font-semibold text-zinc-100">
             {view === "list"  && "Expense Tracker"}
             {view === "detail" && (detail?.name ?? "Tracker")}
@@ -146,10 +151,10 @@ export function ExpenseTrackerApp({ open, standalone = false, initialTrackerId =
             trackers={trackers}
             loading={loading}
             creating={creating}
-            onCreate={async (name) => {
+            onCreate={async (name, template) => {
               setCreating(true);
               try {
-                const tracker = await api.createTracker({ name });
+                const tracker = await api.createTracker({ name, template });
                 await refreshList();
                 openTracker(tracker.id);
               } finally { setCreating(false); }
@@ -161,9 +166,11 @@ export function ExpenseTrackerApp({ open, standalone = false, initialTrackerId =
           <DetailView
             tracker={detail}
             loading={loading}
+            viewerUserId={user?.id}
             onChange={reloadDetail}
             onSettle={openSettlement}
             onDeleted={() => { void refreshList(); backToList(); }}
+            onLeft={() => { void refreshList(); backToList(); }}
           />
         )}
         {view === "settle" && settlement && detail && (
@@ -191,11 +198,17 @@ function ListView({
   trackers: TrackerSummary[];
   loading: boolean;
   creating: boolean;
-  onCreate: (name: string) => Promise<void>;
+  onCreate: (name: string, template?: string) => Promise<void>;
   onOpen: (id: string) => void;
 }) {
   const [newName, setNewName] = useState("");
+  const [template, setTemplate] = useState<string>("blank");
+  const [templates, setTemplates] = useState<api.TrackerTemplate[]>([]);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    void api.listTrackerTemplates().then(setTemplates).catch(() => setTemplates([]));
+  }, []);
 
   // Use a real form so the browser handles Enter + the empty-input case.
   // The button only disables while the request is in flight — clicking it
@@ -207,9 +220,12 @@ function ListView({
       inputRef.current?.focus();
       return;
     }
-    await onCreate(name);
+    await onCreate(name, template);
     setNewName("");
+    setTemplate("blank");
   }
+
+  const selectedTpl = templates.find(t => t.slug === template);
 
   // Aggregate view-level totals so the user lands on something meaningful
   // even before opening a specific tracker.
@@ -228,7 +244,10 @@ function ListView({
         <div aria-hidden className="pointer-events-none absolute -top-20 -right-20 w-56 h-56 rounded-full bg-violet-500/15 blur-3xl" />
         <div aria-hidden className="pointer-events-none absolute -bottom-20 -left-10 w-56 h-56 rounded-full bg-fuchsia-500/10 blur-3xl" />
         <div className="relative">
-          <div className="text-[11px] uppercase tracking-wider font-semibold text-zinc-400 mb-1">Expense Tracker</div>
+          <div className="flex items-center gap-2 mb-1">
+            <ExpenseTrackerIcon size={28} className="rounded-md shadow-sm shadow-violet-900/30" />
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-zinc-400">Expense Tracker</div>
+          </div>
           <h2 className="text-zinc-100 text-2xl sm:text-3xl font-semibold tracking-tight max-w-xl">
             Trackers, daily spends, dinner clubs — split fairly, settle in two taps.
           </h2>
@@ -246,27 +265,66 @@ function ListView({
         </div>
       </div>
 
-      {/* Create */}
+      {/* Create — name + template picker. Template seeds categories so the
+          first expense can already be tagged without busywork. */}
       <form
         onSubmit={submit}
-        className="rounded-2xl border border-zinc-800/60 bg-zinc-900 p-4 sm:p-5 flex items-center gap-3"
+        className="rounded-2xl border border-zinc-800/60 bg-zinc-900 p-4 sm:p-5 flex flex-col gap-3"
       >
-        <Sparkles size={16} className="text-violet-400 shrink-0" />
-        <input
-          ref={inputRef}
-          className="flex-1 bg-zinc-950 border border-zinc-700/70 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-violet-500/60"
-          placeholder="New tracker (e.g. Goa Apr 2026, Roommate utilities, Dinner club)"
-          value={newName}
-          onChange={e => setNewName(e.target.value)}
-        />
-        <button
-          type="submit"
-          disabled={creating}
-          title="Create a new tracker — invite members by email and start logging shared expenses"
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium disabled:opacity-50"
-        >
-          {creating ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Create
-        </button>
+        <div className="flex items-center gap-3">
+          <Sparkles size={16} className="text-violet-400 shrink-0" />
+          <input
+            ref={inputRef}
+            className="flex-1 bg-zinc-950 border border-zinc-700/70 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-violet-500/60"
+            placeholder="New tracker (e.g. Goa Apr 2026, Roommate utilities, Dinner club)"
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+          />
+          <button
+            type="submit"
+            disabled={creating}
+            title="Create a new tracker — invite members by email and start logging shared expenses"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium disabled:opacity-50 shrink-0"
+          >
+            {creating ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Create
+          </button>
+        </div>
+        {templates.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500">Start from a template</span>
+            <div className="flex flex-wrap gap-1.5">
+              {templates.map(t => (
+                <button
+                  key={t.slug}
+                  type="button"
+                  onClick={() => setTemplate(t.slug)}
+                  title={t.description}
+                  className={cn(
+                    "px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors border",
+                    template === t.slug
+                      ? "bg-violet-500/15 text-violet-200 border-violet-500/30"
+                      : "bg-zinc-950 text-zinc-400 hover:text-zinc-200 border-zinc-800 hover:border-zinc-700",
+                  )}
+                >{t.label}</button>
+              ))}
+            </div>
+            {selectedTpl && selectedTpl.categories.length > 0 && (
+              <div className="text-[11px] text-zinc-500 flex flex-wrap items-center gap-1.5">
+                <span>Will create:</span>
+                {selectedTpl.categories.map(c => (
+                  <span key={c.name}
+                        className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded border", colorChip(c.color))}>
+                    <span className={cn("w-1.5 h-1.5 rounded-full", colorDot(c.color))} />
+                    {c.name}
+                  </span>
+                ))}
+              </div>
+            )}
+            {selectedTpl && selectedTpl.categories.length === 0 && (
+              <div className="text-[11px] text-zinc-600">Empty start — you'll add categories later as you go.</div>
+            )}
+          </div>
+        )}
       </form>
 
       {/* List */}
@@ -370,17 +428,21 @@ function MiniStat({ label, value, tone }: { label: string; value: string; tone?:
 /* ────────────────────────── DETAIL ────────────────────────── */
 
 function DetailView({
-  tracker, loading, onChange, onSettle, onDeleted,
+  tracker, loading, onChange, onSettle, onDeleted, onLeft, viewerUserId,
 }: {
   tracker: TrackerDetail;
   loading: boolean;
   onChange: () => Promise<void>;
   onSettle: () => void;
   onDeleted: () => void;
+  onLeft: () => void;
+  viewerUserId?: string | null;
 }) {
   const [showSheet, setShowSheet]   = useState<TrackerExpense | "new" | null>(null);
+  const [seedPayerId, setSeedPayerId] = useState<string | undefined>(undefined);
   const [showInvite, setShowInvite] = useState(false);
   const [showInfo, setShowInfo]     = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [tab, setTab]               = useState<"activity" | "stats">("activity");
   const [search, setSearch]         = useState("");
 
@@ -391,6 +453,23 @@ function DetailView({
 
   const memberStats = useMemo(() => buildMemberStats(tracker), [tracker]);
   const greedyTransfers = useMemo(() => greedyDebt(tracker.balances), [tracker.balances]);
+
+  // Resolve "which member am I" so per-row UI can gate destructive actions.
+  // Joined members are matched by user_id; the creator may be linked or
+  // not, so fall back to the row tagged invite_status='creator'.
+  const viewerMemberId = useMemo(() => {
+    if (!viewerUserId) return undefined;
+    const own = tracker.members.find(m => m.user_id === viewerUserId);
+    if (own) return own.id;
+    if (viewerUserId === tracker.creator_id) {
+      return tracker.members.find(m => m.invite_status === "creator")?.id;
+    }
+    return undefined;
+  }, [tracker.members, tracker.creator_id, viewerUserId]);
+  const trackerCreatorMemberId = useMemo(
+    () => tracker.members.find(m => m.invite_status === "creator")?.id,
+    [tracker.members],
+  );
 
   const filteredExpenses = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -442,6 +521,11 @@ function DetailView({
               title="Download all expenses as a CSV file"
               className="p-2 rounded-lg border border-zinc-700/70 hover:bg-zinc-800/60 text-zinc-300"
             ><Download size={14} /></button>
+            <button
+              onClick={() => setShowImport(true)}
+              title="Import expenses from an Excel or CSV sheet"
+              className="p-2 rounded-lg border border-zinc-700/70 hover:bg-zinc-800/60 text-zinc-300"
+            ><Upload size={14} /></button>
             <button
               onClick={() => setShowInvite(true)}
               title="Invite someone by email"
@@ -501,6 +585,43 @@ function DetailView({
                    net < -0.01 ? `${inrCompact(net)} owes`  :
                                  "settled"}
                 </span>
+                {/* Quick-add: clicking the `+` jumps straight into a new
+                    expense with this member already set as payer. The
+                    common case ("I just paid for X — log it fast") goes
+                    from 4 clicks to 1. */}
+                <button
+                  type="button"
+                  onClick={() => { setSeedPayerId(m.id); setShowSheet("new"); }}
+                  title={`Quick-add: ${m.display_name} paid for something`}
+                  className="ml-0.5 w-5 h-5 rounded-full text-zinc-500 hover:text-violet-200 hover:bg-violet-500/15 inline-flex items-center justify-center transition-colors"
+                >
+                  <Plus size={12} />
+                </button>
+                {/* Nudge — only meaningful for members other than the
+                    viewer, and only when they have an email on file. The
+                    button is the smallest possible footprint; the click
+                    opens a tiny prompt for an optional message. */}
+                {m.email && m.id !== (viewerUserId ? tracker.members.find(x => x.user_id === viewerUserId)?.id : undefined) && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const note = window.prompt(
+                        `Nudge ${m.display_name}? Add an optional note (or leave blank for the default "settle up" reminder):`,
+                        "",
+                      );
+                      if (note == null) return;
+                      try {
+                        const r = await api.nudgeTrackerMember(tracker.id, m.id, { note: note.trim() || undefined });
+                        if (r.sent) alert(`Nudge sent to ${r.to}.`);
+                        else        alert(`Could not send: ${r.error || 'unknown error'}`);
+                      } catch (err) { alert((err as Error).message); }
+                    }}
+                    title={`Nudge ${m.display_name} — emails them a quick reminder with their balance and the tracker link`}
+                    className="ml-0.5 w-5 h-5 rounded-full text-zinc-500 hover:text-amber-200 hover:bg-amber-500/10 inline-flex items-center justify-center transition-colors"
+                  >
+                    <BellRing size={11} />
+                  </button>
+                )}
                 {canRemove && (
                   <button
                     type="button"
@@ -589,6 +710,9 @@ function DetailView({
                       key={e.id}
                       expense={e}
                       members={tracker.members}
+                      categories={tracker.categories}
+                      viewerMemberId={viewerMemberId}
+                      trackerCreatorMemberId={trackerCreatorMemberId}
                       onEdit={() => setShowSheet(e)}
                       onDelete={async () => {
                         if (!confirm("Delete this expense?")) return;
@@ -625,8 +749,9 @@ function DetailView({
         <ExpenseSheet
           tracker={tracker}
           existing={showSheet === "new" ? undefined : showSheet}
-          onClose={() => setShowSheet(null)}
-          onSaved={async () => { setShowSheet(null); await onChange(); }}
+          initialPayerId={showSheet === "new" ? seedPayerId : undefined}
+          onClose={() => { setShowSheet(null); setSeedPayerId(undefined); }}
+          onSaved={async () => { setShowSheet(null); setSeedPayerId(undefined); await onChange(); }}
         />
       )}
       {showInvite && (
@@ -639,9 +764,18 @@ function DetailView({
       {showInfo && (
         <TrackerInfoSheet
           tracker={tracker}
+          viewerUserId={viewerUserId}
           onClose={() => setShowInfo(false)}
           onSaved={async () => { setShowInfo(false); await onChange(); }}
           onDeleted={() => { setShowInfo(false); onDeleted(); }}
+          onLeft={() => { setShowInfo(false); onLeft(); }}
+        />
+      )}
+      {showImport && (
+        <ImportSheet
+          tracker={tracker}
+          onClose={() => setShowImport(false)}
+          onImported={async () => { setShowImport(false); await onChange(); }}
         />
       )}
 
@@ -655,17 +789,28 @@ function DetailView({
 }
 
 function ExpenseRow({
-  expense, members, onEdit, onDelete,
+  expense, members, categories, viewerMemberId, trackerCreatorMemberId, onEdit, onDelete,
 }: {
   expense: TrackerExpense;
   members: TrackerMember[];
+  categories?: TrackerCategory[];
+  /** member.id of the current viewer (joined member only). Used to gate
+   *  the Delete button — only the expense creator or the tracker creator
+   *  can delete; backend re-checks. */
+  viewerMemberId?: string;
+  trackerCreatorMemberId?: string;
   onEdit?: () => void;
   onDelete: () => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const payer = members.find(m => m.id === expense.payer_id);
   const multi = (expense.payments?.length ?? 0) > 1;
+  const canDelete = !!viewerMemberId && (
+    (expense.created_by && String(expense.created_by) === String(viewerMemberId))
+    || (trackerCreatorMemberId && String(trackerCreatorMemberId) === String(viewerMemberId))
+  );
   const paidLabel = multi ? `${expense.payments.length} paid` : `${payer?.display_name ?? "?"} paid`;
+  const cat = expense.category_id ? categories?.find(c => c.id === expense.category_id) : null;
   return (
     <div className="border-b border-zinc-800/40 last:border-b-0 hover:bg-zinc-800/20 transition-colors">
       <div className="px-3 sm:px-4 py-3 flex items-center gap-3">
@@ -674,11 +819,22 @@ function ExpenseRow({
           className="flex items-center gap-3 flex-1 min-w-0 text-left"
           title="Click to see split details"
         >
-          <span className="h-8 w-8 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-300 shrink-0">
+          <span className={cn(
+            "h-8 w-8 rounded-lg flex items-center justify-center shrink-0 border",
+            cat ? colorChip(cat.color) : "bg-violet-500/10 border-violet-500/20 text-violet-300",
+          )}>
             <Receipt size={14} />
           </span>
           <div className="flex-1 min-w-0">
-            <div className="text-sm text-zinc-100 truncate">{expense.description}</div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-zinc-100 truncate">{expense.description}</span>
+              {cat && (
+                <span className={cn("text-[10px] px-1.5 py-0.5 rounded border inline-flex items-center gap-1 shrink-0", colorChip(cat.color))}>
+                  <span className={cn("w-1.5 h-1.5 rounded-full", colorDot(cat.color))} />
+                  {cat.name}
+                </span>
+              )}
+            </div>
             <div className="text-[11px] text-zinc-500 truncate">
               {paidLabel} · {expense.split_kind === "equal" ? `split ${expense.splits.length}` : "custom split"}
               <span className="ml-1 text-zinc-600" title={`Added ${fullTimestamp(expense.created_at)}`}>
@@ -724,11 +880,18 @@ function ExpenseRow({
               );
             })}
           </div>
-          <button onClick={onDelete}
-                  title="Permanently remove this expense — recalculates balances for everyone"
-                  className="self-start mt-1 inline-flex items-center gap-1 text-[11px] text-red-400 hover:text-red-300">
-            <Trash2 size={11} /> Delete expense
-          </button>
+          {canDelete ? (
+            <button onClick={onDelete}
+                    title="Permanently remove this expense — recalculates balances for everyone"
+                    className="self-start mt-1 inline-flex items-center gap-1 text-[11px] text-red-400 hover:text-red-300">
+              <Trash2 size={11} /> Delete expense
+            </button>
+          ) : (
+            <span title="Only the person who logged this expense (or the tracker creator) can delete it"
+                  className="self-start mt-1 text-[11px] text-zinc-600 cursor-help">
+              Only the creator can delete
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -742,11 +905,14 @@ function ExpenseRow({
    ───────────────────────────────────────────────────────────────────── */
 
 function ExpenseSheet({
-  tracker, existing, onClose, onSaved,
+  tracker, existing, initialPayerId, onClose, onSaved,
 }: {
   tracker: TrackerDetail;
   /** Optional — when set, the sheet edits this expense in place. */
   existing?: TrackerExpense;
+  /** Optional — when set on a "new" expense, pre-selects this member as
+   *  the payer. Used by the quick-add `+` next to each member chip. */
+  initialPayerId?: string;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -762,8 +928,9 @@ function ExpenseSheet({
         included: new Set(tracker.members.map(m => m.id)),
         shares: {} as Record<string, string>,
         paymentKind: "single" as const,
-        singlePayer: tracker.members[0]?.id ?? "",
+        singlePayer: initialPayerId || tracker.members[0]?.id || "",
         paid: {} as Record<string, string>,
+        categoryId: "" as string,
       };
     }
     const includedIds = new Set(existing.splits.map(s => s.member_id));
@@ -782,8 +949,9 @@ function ExpenseSheet({
       paymentKind: (isMulti ? "partial" : "single") as "single" | "partial",
       singlePayer: existing.payer_id,
       paid: paidRec,
+      categoryId: existing.category_id ?? "",
     };
-  }, [existing, tracker.members]);
+  }, [existing, tracker.members, initialPayerId]);
 
   const [description, setDescription] = useState(initial.description);
   const [amount, setAmount]           = useState(initial.amount);
@@ -794,7 +962,26 @@ function ExpenseSheet({
   const [paymentKind, setPaymentKind] = useState<"single" | "partial">(initial.paymentKind);
   const [singlePayer, setSinglePayer] = useState<string>(initial.singlePayer);
   const [paid, setPaid]               = useState<Record<string, string>>(initial.paid);
+  const [categoryId, setCategoryId]   = useState<string>(initial.categoryId);
+  const [creatingCat, setCreatingCat] = useState(false);
+  const [newCatName, setNewCatName]   = useState("");
   const [saving, setSaving]           = useState(false);
+
+  const categories = tracker.categories ?? [];
+
+  async function createCategoryInline() {
+    const name = newCatName.trim();
+    if (!name) return;
+    try {
+      const c = await api.createTrackerCategory(tracker.id, { name });
+      // Hot-patch: append into the tracker.categories list directly so the
+      // dropdown updates without waiting for a refresh round-trip.
+      tracker.categories = [...categories, c];
+      setCategoryId(c.id);
+      setNewCatName("");
+      setCreatingCat(false);
+    } catch (e) { alert((e as Error).message); }
+  }
 
   const amt = Number(amount) || 0;
   const paidTotal = Object.values(paid).reduce((s, v) => s + (Number(v) || 0), 0);
@@ -871,6 +1058,7 @@ function ExpenseSheet({
         split_kind: splitKindToSend,
         splits,
         payments,
+        category_id: categoryId || null,
       };
       if (existing) {
         await api.updateTrackerExpense(tracker.id, existing.id, payload);
@@ -901,6 +1089,57 @@ function ExpenseSheet({
                    value={date} onChange={e => setDate(e.target.value)} />
           </Field>
         </FieldGrid>
+
+        {/* Category — optional tag, used for stats / pie. Inline create
+            so the user never has to leave the sheet to add a missing one. */}
+        <Field label="Category" hint="Tag this expense — Food, Travel, etc. Used in the stats pie chart and per-category totals.">
+          {!creatingCat ? (
+            <div className="flex items-center gap-2">
+              <select
+                className={cn(inputCls, "flex-1")}
+                value={categoryId}
+                onChange={e => setCategoryId(e.target.value)}
+              >
+                <option value="">— No category —</option>
+                {categories.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setCreatingCat(true)}
+                title="Create a new category for this tracker"
+                className="px-2.5 py-1.5 rounded-md text-xs text-violet-300 hover:text-violet-200 border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/15 inline-flex items-center gap-1"
+              >
+                <Plus size={11} /> new
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <input
+                autoFocus
+                className={cn(inputCls, "flex-1")}
+                placeholder="Category name (e.g. Food, Lodging)"
+                value={newCatName}
+                onChange={e => setNewCatName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void createCategoryInline(); } }}
+              />
+              <button type="button" onClick={() => void createCategoryInline()}
+                      className="px-2.5 py-1.5 rounded-md text-xs text-emerald-300 border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/15">add</button>
+              <button type="button" onClick={() => { setCreatingCat(false); setNewCatName(""); }}
+                      className="px-2.5 py-1.5 rounded-md text-xs text-zinc-500 hover:text-zinc-200">cancel</button>
+            </div>
+          )}
+          {categories.length > 0 && categoryId && (() => {
+            const c = categories.find(x => x.id === categoryId);
+            return c ? (
+              <span className={cn("mt-1.5 self-start inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px]", colorChip(c.color))}>
+                <span className={cn("w-1.5 h-1.5 rounded-full", colorDot(c.color))} />
+                {c.name}
+              </span>
+            ) : null;
+          })()}
+        </Field>
 
         {/* Paid by — single payer or partial */}
         <Field label="Paid by" hint="Who actually paid the bill. Use Partial when more than one person chipped in (e.g. ₹40 = A 16 + B 24).">
@@ -1053,6 +1292,14 @@ function InviteSheet({
     finally { setResending(null); }
   }
 
+  async function cancel(memberId: string, displayName: string) {
+    if (!confirm(`Cancel ${displayName}'s invite? Their existing magic-link will stop working immediately.`)) return;
+    try {
+      await api.cancelTrackerInvite(tracker.id, memberId);
+      await onInvited();
+    } catch (e) { alert((e as Error).message); }
+  }
+
   function copyLink(token: string) {
     const url = `${window.location.origin}/trackers/guest/${token}`;
     navigator.clipboard.writeText(url).catch(() => {});
@@ -1106,6 +1353,11 @@ function InviteSheet({
                     : justResent
                       ? <><Check size={11} className="text-emerald-400" /> sent</>
                       : <><Send size={11} /> resend</>}
+                </button>
+                <button onClick={() => cancel(m.id, m.display_name)}
+                        title="Cancel this invite — invalidates the magic-link so the recipient can't open the tracker anymore"
+                        className="inline-flex items-center gap-1 text-red-400 hover:text-red-300">
+                  <X size={11} /> cancel
                 </button>
                 <button onClick={() => copyLink(m.invite_token!)}
                         title="Copy the invite link to your clipboard so you can share it manually (e.g. via WhatsApp)"
@@ -1313,6 +1565,11 @@ function StatsPanel({ tracker, stats, transfers }: {
           </div>
         )}
       </div>
+
+      {/* Spend by category — pie chart + breakdown */}
+      <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/50 p-4 sm:p-5 lg:col-span-2">
+        <CategoryStats tracker={tracker} />
+      </div>
     </div>
   );
 }
@@ -1320,12 +1577,15 @@ function StatsPanel({ tracker, stats, transfers }: {
 /* ────────────────────────── TRACKER INFO ────────────────────────── */
 
 function TrackerInfoSheet({
-  tracker, onClose, onSaved, onDeleted,
+  tracker, viewerUserId, onClose, onSaved, onDeleted, onLeft,
 }: {
   tracker: TrackerDetail;
+  /** Current authed user's id — drives whether Leave or Delete shows. */
+  viewerUserId?: string | null;
   onClose: () => void;
   onSaved: () => Promise<void>;
   onDeleted: () => void;
+  onLeft:    () => void;
 }) {
   const [name, setName]     = useState(tracker.name);
   const [start, setStart]   = useState(tracker.start_date ?? "");
@@ -1333,6 +1593,10 @@ function TrackerInfoSheet({
   const [note, setNote]     = useState(tracker.note ?? "");
   const [busy, setBusy]     = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [leaving, setLeaving]   = useState(false);
+
+  // Creator-only sees Delete; everyone else gets Leave instead.
+  const isCreator = !!viewerUserId && viewerUserId === tracker.creator_id;
 
   async function save(ev?: React.FormEvent) {
     ev?.preventDefault();
@@ -1401,24 +1665,457 @@ function TrackerInfoSheet({
         </div>
       </form>
 
-      {/* Danger zone — separate visual block so users don't fat-finger it */}
+      {/* Danger zone — creator sees Delete; everyone else sees Leave.
+          Two separate verbs because they have different consequences:
+          delete drops the whole tracker for everyone; leave just removes
+          you (and is refused by the backend if you have any expense
+          activity, which would break the math). */}
       <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 p-3">
         <div className="text-[11px] uppercase tracking-wider font-semibold text-red-300 mb-1">Danger zone</div>
-        <p className="text-xs text-zinc-400 mb-2">
-          Deleting removes the tracker, every expense, every split, every payment. There's no undo.
-        </p>
-        <button
-          type="button"
-          onClick={destroy}
-          disabled={deleting}
-          title="Permanently delete this tracker — only the creator can do this"
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-500/40 text-red-300 hover:bg-red-500/10 text-xs font-medium disabled:opacity-50"
-        >
-          {deleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-          {deleting ? "Deleting…" : "Delete tracker"}
-        </button>
+        {isCreator ? (
+          <>
+            <p className="text-xs text-zinc-400 mb-2">
+              Deleting removes the tracker, every expense, every split, every payment. There's no undo.
+            </p>
+            <button
+              type="button"
+              onClick={destroy}
+              disabled={deleting}
+              title="Permanently delete this tracker"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-500/40 text-red-300 hover:bg-red-500/10 text-xs font-medium disabled:opacity-50"
+            >
+              {deleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+              {deleting ? "Deleting…" : "Delete tracker"}
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-zinc-400 mb-2">
+              You'll stop seeing this tracker. Refused if you're on any expense — clear or reassign those first.
+            </p>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!confirm(`Leave "${tracker.name}"? You can be re-invited later.`)) return;
+                setLeaving(true);
+                try {
+                  await api.leaveTracker(tracker.id);
+                  onLeft();
+                } catch (e) { alert((e as Error).message); }
+                finally { setLeaving(false); }
+              }}
+              disabled={leaving}
+              title="Leave this tracker"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-500/40 text-red-300 hover:bg-red-500/10 text-xs font-medium disabled:opacity-50"
+            >
+              {leaving ? <Loader2 size={12} className="animate-spin" /> : <LogOut size={12} />}
+              {leaving ? "Leaving…" : "Leave tracker"}
+            </button>
+          </>
+        )}
       </div>
     </Sheet>
+  );
+}
+
+/* ────────────────────────── IMPORT FROM SHEET ──────────────────────────
+   Bulk-import expenses from an .xlsx / .csv file. Three steps:
+     1. Pick a file. We parse it with SheetJS (lazy-loaded — keeps the
+        main bundle small for users who never touch import).
+     2. Map columns → fields. The detector pre-fills with the obvious
+        ones (description, amount, date, payer, category, note,
+        split_with). User can override if their sheet uses different
+        headers.
+     3. Preview the first 5 rows + counts, then Import. Backend returns
+        a per-row report so we can show "X imported, Y skipped" with the
+        specific errors next to the bad rows.
+   ─────────────────────────────────────────────────────────────────── */
+
+const IMPORT_FIELDS = [
+  { key: "description", label: "Description", required: true,
+    hints: ["description", "desc", "title", "what", "item", "purpose", "for"] },
+  { key: "amount",      label: "Amount",      required: true,
+    hints: ["amount", "amt", "cost", "price", "total", "paid"] },
+  { key: "expense_date",label: "Date",        required: false,
+    hints: ["date", "expense_date", "day", "when"] },
+  { key: "payer",       label: "Paid by",     required: false,
+    hints: ["payer", "paid by", "who paid", "by", "person", "member"] },
+  { key: "category",    label: "Category",    required: false,
+    hints: ["category", "cat", "type", "tag", "kind"] },
+  { key: "note",        label: "Note",        required: false,
+    hints: ["note", "notes", "remark", "comment"] },
+  { key: "split_with",  label: "Split with",  required: false,
+    hints: ["split_with", "split with", "split", "between", "splitwith"] },
+] as const;
+
+function ImportSheet({
+  tracker, onClose, onImported,
+}: {
+  tracker: TrackerDetail;
+  onClose: () => void;
+  onImported: () => Promise<void>;
+}) {
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [rows, setRows]       = useState<Record<string, any>[]>([]);
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [parsing, setParsing] = useState(false);
+  const [busy, setBusy]       = useState(false);
+  const [result, setResult]   = useState<{ created: number; total: number; errors: { row: number; error: string }[] } | null>(null);
+  const [createCats, setCreateCats] = useState(true);
+  const [fileName, setFileName] = useState<string | null>(null);
+
+  async function onFile(ev: React.ChangeEvent<HTMLInputElement>) {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setParsing(true);
+    setResult(null);
+    try {
+      const XLSX = await import("xlsx");
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(sheet, { defval: "" }) as Record<string, any>[];
+      const hs = json.length ? Object.keys(json[0]) : [];
+      setHeaders(hs);
+      setRows(json);
+      // Auto-map by header hints.
+      const m: Record<string, string> = {};
+      for (const f of IMPORT_FIELDS) {
+        const h = hs.find(x => f.hints.some(hint => String(x).toLowerCase().trim() === hint));
+        if (h) m[f.key] = h;
+      }
+      setMapping(m);
+    } catch (e) { alert("Could not parse that file: " + (e as Error).message); }
+    finally { setParsing(false); }
+  }
+
+  function buildPayload(): api.ImportRow[] {
+    return rows.map(r => {
+      const out: any = {};
+      for (const f of IMPORT_FIELDS) {
+        const h = mapping[f.key];
+        if (!h) continue;
+        const v = r[h];
+        if (v === "" || v === undefined || v === null) continue;
+        if (f.key === "amount") {
+          const n = typeof v === "number" ? v : Number(String(v).replace(/[^0-9.\-]/g, ""));
+          if (!isNaN(n)) out.amount = n;
+        } else if (f.key === "split_with") {
+          out.split_with = String(v).split(/[,;|]/).map(s => s.trim()).filter(Boolean);
+        } else if (f.key === "expense_date") {
+          // SheetJS gives Excel date numbers as Date objects when type:'d'
+          // — for "defval:''" we get the formatted string. Try Date parse.
+          if (v instanceof Date) out.expense_date = v.toISOString().slice(0, 10);
+          else {
+            const d = new Date(String(v));
+            out.expense_date = isNaN(d.getTime()) ? String(v) : d.toISOString().slice(0, 10);
+          }
+        } else {
+          out[f.key] = String(v).trim();
+        }
+      }
+      return out as api.ImportRow;
+    }).filter(r => r.description && r.amount);
+  }
+
+  async function doImport() {
+    const payload = buildPayload();
+    if (!payload.length) { alert("No valid rows to import. Make sure description + amount are mapped."); return; }
+    setBusy(true);
+    try {
+      const r = await api.importTrackerExpenses(tracker.id, payload, { create_missing_categories: createCats });
+      setResult(r);
+      if (r.created > 0) await onImported();
+    } catch (e) { alert((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  const ready = mapping.description && mapping.amount && rows.length > 0;
+  const previewRows = rows.slice(0, 5);
+
+  return (
+    <Sheet onClose={onClose} title="Import expenses">
+      {!result && (
+        <>
+          <p className="text-xs text-zinc-500">
+            Drop an Excel (<span className="text-zinc-300">.xlsx</span>) or CSV file. The first row should be column headers.
+            We'll auto-map the obvious ones — adjust below if needed.
+          </p>
+
+          <label className="flex items-center gap-3 p-3 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/50 cursor-pointer hover:border-violet-500/40">
+            <FileSpreadsheet size={16} className="text-violet-300 shrink-0" />
+            <span className="flex-1 min-w-0">
+              <span className="text-sm text-zinc-200 truncate block">{fileName ?? "Choose a file…"}</span>
+              <span className="text-[11px] text-zinc-500">{rows.length > 0 ? `${rows.length} rows detected` : "xlsx, xls, csv up to ~500 rows"}</span>
+            </span>
+            <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={onFile} />
+            {parsing && <Loader2 size={14} className="animate-spin text-violet-300" />}
+          </label>
+
+          {headers.length > 0 && (
+            <div className="flex flex-col gap-2 mt-1">
+              <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500">Map columns</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {IMPORT_FIELDS.map(f => (
+                  <label key={f.key} className="flex flex-col gap-1">
+                    <span className="text-[11px] text-zinc-400">
+                      {f.label}{f.required && <span className="text-amber-300"> *</span>}
+                    </span>
+                    <select
+                      className={inputCls}
+                      value={mapping[f.key] ?? ""}
+                      onChange={e => setMapping(m => ({ ...m, [f.key]: e.target.value }))}
+                    >
+                      <option value="">— Skip —</option>
+                      {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                  </label>
+                ))}
+              </div>
+              <label className="flex items-center gap-2 mt-2 text-xs text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={createCats}
+                  onChange={e => setCreateCats(e.target.checked)}
+                  className="accent-violet-500"
+                />
+                Auto-create categories that don't exist yet
+              </label>
+            </div>
+          )}
+
+          {ready && previewRows.length > 0 && (
+            <div className="flex flex-col gap-1 mt-1">
+              <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500">Preview · first {previewRows.length} of {rows.length}</div>
+              <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/40">
+                <table className="w-full text-[11px]">
+                  <thead className="text-zinc-500">
+                    <tr>
+                      {IMPORT_FIELDS.filter(f => mapping[f.key]).map(f => (
+                        <th key={f.key} className="text-left px-2 py-1.5 font-medium">{f.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewRows.map((r, i) => (
+                      <tr key={i} className="border-t border-zinc-800/50">
+                        {IMPORT_FIELDS.filter(f => mapping[f.key]).map(f => (
+                          <td key={f.key} className="px-2 py-1.5 text-zinc-200 truncate max-w-[200px]">
+                            {String(r[mapping[f.key]] ?? "")}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-800/60 mt-1">
+            <button type="button" onClick={onClose} className="px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200">Cancel</button>
+            <button
+              type="button"
+              onClick={doImport}
+              disabled={!ready || busy}
+              className="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium disabled:opacity-50 inline-flex items-center gap-1.5"
+            >
+              {busy ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+              {busy ? "Importing…" : `Import ${rows.length} row${rows.length === 1 ? "" : "s"}`}
+            </button>
+          </div>
+        </>
+      )}
+
+      {result && (
+        <div className="flex flex-col gap-3">
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+            <div className="text-sm text-emerald-300 font-semibold inline-flex items-center gap-2">
+              <Check size={14} /> {result.created} of {result.total} expense{result.total === 1 ? "" : "s"} imported
+            </div>
+            {result.errors.length > 0 && (
+              <div className="text-[11px] text-amber-300 mt-1">{result.errors.length} skipped — see below</div>
+            )}
+          </div>
+          {result.errors.length > 0 && (
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 max-h-[40vh] overflow-y-auto">
+              <table className="w-full text-[11px]">
+                <thead className="text-zinc-500">
+                  <tr><th className="text-left px-3 py-2 font-medium">Row</th><th className="text-left px-3 py-2 font-medium">Reason</th></tr>
+                </thead>
+                <tbody>
+                  {result.errors.map(e => (
+                    <tr key={e.row} className="border-t border-zinc-800/50">
+                      <td className="px-3 py-1.5 text-zinc-300 num">{e.row}</td>
+                      <td className="px-3 py-1.5 text-zinc-400">{e.error}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="flex justify-end pt-2 border-t border-zinc-800/60">
+            <button onClick={onClose}
+                    className="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium">
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
+/* ────────────────────────── CATEGORY STATS ──────────────────────────
+   Two views in one card:
+     1. A donut showing the share of total spend per category.
+     2. A small grid: each member × each category, so users can see
+        "Aman spent ₹X on Food, ₹Y on Travel" without exporting CSV.
+
+   The pie always includes an "Uncategorised" slice for expenses without
+   a tag, so the totals add up to the expanse total.
+   ──────────────────────────────────────────────────────────────────── */
+
+function CategoryStats({ tracker }: { tracker: TrackerDetail }) {
+  const categories = tracker.categories ?? [];
+  const members = tracker.members;
+
+  // Aggregate amount per category and amount per (member, category).
+  // We use a synthetic "uncat" key for un-tagged expenses.
+  const UNCAT = "__uncat__";
+  const totals = useMemo(() => {
+    const perCat: Record<string, number> = {};
+    const perCatPerMember: Record<string, Record<string, number>> = {};
+    for (const e of tracker.expenses) {
+      const key = e.category_id || UNCAT;
+      perCat[key] = (perCat[key] ?? 0) + Number(e.amount || 0);
+      perCatPerMember[key] ??= {};
+      // Distribute by splits — that's "who carries this category's cost".
+      for (const s of e.splits) {
+        perCatPerMember[key][s.member_id] = (perCatPerMember[key][s.member_id] ?? 0) + Number(s.share || 0);
+      }
+    }
+    return { perCat, perCatPerMember };
+  }, [tracker.expenses]);
+
+  const total = Object.values(totals.perCat).reduce((s, v) => s + v, 0);
+  const orderedKeys = [
+    ...categories.map(c => c.id),
+    ...(totals.perCat[UNCAT] ? [UNCAT] : []),
+  ].filter(k => (totals.perCat[k] ?? 0) > 0);
+
+  const pieData = orderedKeys.map(k => {
+    if (k === UNCAT) return { key: k, name: "Uncategorised", color: "zinc", value: totals.perCat[k] };
+    const c = categories.find(x => x.id === k);
+    return { key: k, name: c?.name ?? "?", color: c?.color ?? "violet", value: totals.perCat[k] };
+  });
+
+  if (total < 0.01) {
+    return (
+      <div>
+        <h3 className="text-sm font-semibold text-zinc-100 mb-1">By category</h3>
+        <p className="text-sm text-zinc-500">No expenses yet — log a few to see a category breakdown.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-zinc-100">By category</h3>
+        <span className="text-[11px] text-zinc-500">{orderedKeys.length} categor{orderedKeys.length === 1 ? "y" : "ies"} · {inrCompact(total)} total</span>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-5">
+        {/* Donut */}
+        <div className="relative h-[200px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={pieData}
+                dataKey="value"
+                innerRadius={55}
+                outerRadius={85}
+                stroke="rgba(0,0,0,0.4)"
+                strokeWidth={2}
+              >
+                {pieData.map((d, i) => (
+                  <Cell key={i} fill={colorHex(d.color)} />
+                ))}
+              </Pie>
+              <RTooltip
+                contentStyle={{
+                  background: "#18181b",
+                  border: "1px solid #3f3f46",
+                  borderRadius: "8px",
+                  fontSize: 12,
+                  color: "#e4e4e7",
+                }}
+                formatter={(v: any, _: any, item: any) => {
+                  const num = Number(v) || 0;
+                  return [
+                    `${inrCompact(num)} (${((num / total) * 100).toFixed(0)}%)`,
+                    item?.payload?.name,
+                  ];
+                }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="text-center">
+              <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500">Total</div>
+              <div className="num text-lg font-semibold text-zinc-100">{inrCompact(total)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Per-member by category — small grid */}
+        <div className="overflow-x-auto -mx-1 px-1">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-[10px] uppercase tracking-wider text-zinc-500">
+                <th className="text-left py-1.5 pr-3 font-medium">Member</th>
+                {pieData.map(d => (
+                  <th key={d.key} className="text-right py-1.5 px-1 font-medium">
+                    <span className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded border", colorChip(d.color))}>
+                      <span className={cn("w-1.5 h-1.5 rounded-full", colorDot(d.color))} />
+                      {d.name}
+                    </span>
+                  </th>
+                ))}
+                <th className="text-right py-1.5 pl-2 font-medium">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {members.map(m => {
+                const row = pieData.map(d => totals.perCatPerMember[d.key]?.[m.id] ?? 0);
+                const memberTotal = row.reduce((s, v) => s + v, 0);
+                if (memberTotal < 0.005) return null;
+                return (
+                  <tr key={m.id} className="border-t border-zinc-800/40">
+                    <td className="py-1.5 pr-3 text-zinc-200 truncate max-w-[140px]">{m.display_name}</td>
+                    {row.map((v, i) => (
+                      <td key={i} className="num py-1.5 px-1 text-right text-zinc-300">
+                        {v > 0 ? inrCompact(v) : <span className="text-zinc-700">·</span>}
+                      </td>
+                    ))}
+                    <td className="num py-1.5 pl-2 text-right text-zinc-100 font-medium">{inrCompact(memberTotal)}</td>
+                  </tr>
+                );
+              })}
+              <tr className="border-t border-zinc-800 bg-zinc-900/40">
+                <td className="py-1.5 pr-3 text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Group</td>
+                {pieData.map(d => (
+                  <td key={d.key} className="num py-1.5 px-1 text-right text-zinc-200">{inrCompact(d.value)}</td>
+                ))}
+                <td className="num py-1.5 pl-2 text-right text-zinc-100 font-medium">{inrCompact(total)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1498,6 +2195,58 @@ function exportTrackerCsv(tracker: TrackerDetail): void {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/* ────────────────────────── category palette ──────────────────────────
+   Backend stores a color *token* (e.g. "violet"); the frontend resolves
+   it to a tailwind class here so we can swap palettes without a DB
+   migration. Keep these in sync with VALID_COLORS in expense_tracker.py.
+   ─────────────────────────────────────────────────────────────────── */
+const COLOR_TOKENS = ["violet", "fuchsia", "emerald", "amber", "sky", "rose", "lime", "orange", "zinc"] as const;
+type ColorToken = typeof COLOR_TOKENS[number];
+
+export function colorDot(color: string): string {
+  const map: Record<ColorToken, string> = {
+    violet:  "bg-violet-400",
+    fuchsia: "bg-fuchsia-400",
+    emerald: "bg-emerald-400",
+    amber:   "bg-amber-400",
+    sky:     "bg-sky-400",
+    rose:    "bg-rose-400",
+    lime:    "bg-lime-400",
+    orange:  "bg-orange-400",
+    zinc:    "bg-zinc-400",
+  };
+  return map[color as ColorToken] ?? map.violet;
+}
+export function colorChip(color: string): string {
+  const map: Record<ColorToken, string> = {
+    violet:  "text-violet-200 bg-violet-500/10 border-violet-500/30",
+    fuchsia: "text-fuchsia-200 bg-fuchsia-500/10 border-fuchsia-500/30",
+    emerald: "text-emerald-200 bg-emerald-500/10 border-emerald-500/30",
+    amber:   "text-amber-200 bg-amber-500/10 border-amber-500/30",
+    sky:     "text-sky-200 bg-sky-500/10 border-sky-500/30",
+    rose:    "text-rose-200 bg-rose-500/10 border-rose-500/30",
+    lime:    "text-lime-200 bg-lime-500/10 border-lime-500/30",
+    orange:  "text-orange-200 bg-orange-500/10 border-orange-500/30",
+    zinc:    "text-zinc-300 bg-zinc-700/30 border-zinc-700",
+  };
+  return map[color as ColorToken] ?? map.violet;
+}
+/** Hex used by the recharts pie. Same token mapping as the chips. */
+export function colorHex(color: string): string {
+  const map: Record<ColorToken, string> = {
+    violet:  "#a78bfa",
+    fuchsia: "#f0abfc",
+    emerald: "#34d399",
+    amber:   "#fbbf24",
+    sky:     "#7dd3fc",
+    rose:    "#fda4af",
+    lime:    "#bef264",
+    orange:  "#fb923c",
+    zinc:    "#a1a1aa",
+  };
+  return map[color as ColorToken] ?? map.violet;
 }
 
 /* ────────────────────────── primitives ────────────────────────── */

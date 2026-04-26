@@ -8,8 +8,11 @@ Provider is selected by the EMAIL_PROVIDER env var:
 Resend env vars:  RESEND_API_KEY, SMTP_FROM
 SMTP env vars:    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM
 """
+from __future__ import annotations
+
 import os
 import smtplib
+from typing import Optional
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -42,30 +45,49 @@ def send_confirmation(to_email: str, confirm_url: str) -> None:
     )
 
 
-def send_email(to_email: str, subject: str, html: str) -> None:
-    """Generic email send used by both auth confirmations and reminder digests."""
+def send_email(
+    to_email: str,
+    subject: str,
+    html: str,
+    *,
+    list_unsubscribe_url: Optional[str] = None,
+) -> None:
+    """Generic email send used by auth confirmations, reminder digests, and
+    tracker invites.
+
+    `list_unsubscribe_url` adds RFC 8058 `List-Unsubscribe` and
+    `List-Unsubscribe-Post` headers so Gmail/Outlook show a one-click
+    "Unsubscribe" affordance next to the From line. The same URL is also
+    in the email footer for clients that ignore the header.
+    """
     if os.environ.get("RESEND_API_KEY"):
-        _send_via_resend(to_email, subject, html)
+        _send_via_resend(to_email, subject, html, list_unsubscribe_url=list_unsubscribe_url)
     else:
-        _send_via_smtp(to_email, subject, html)
+        _send_via_smtp(to_email, subject, html, list_unsubscribe_url=list_unsubscribe_url)
 
 
-def _send_via_resend(to_email: str, subject: str, html: str) -> None:
+def _send_via_resend(to_email: str, subject: str, html: str, *, list_unsubscribe_url: Optional[str]) -> None:
     try:
         import resend  # pip install resend
     except ImportError:
         raise RuntimeError("resend package not installed — run: pip install resend")
 
     resend.api_key = os.environ["RESEND_API_KEY"]
-    resend.Emails.send({
+    payload = {
         "from":    os.environ.get("SMTP_FROM", "onboarding@resend.dev"),
         "to":      to_email,
         "subject": subject,
         "html":    html,
-    })
+    }
+    if list_unsubscribe_url:
+        payload["headers"] = {
+            "List-Unsubscribe":      f"<{list_unsubscribe_url}>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        }
+    resend.Emails.send(payload)
 
 
-def _send_via_smtp(to_email: str, subject: str, html: str) -> None:
+def _send_via_smtp(to_email: str, subject: str, html: str, *, list_unsubscribe_url: Optional[str]) -> None:
     smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.environ.get("SMTP_PORT", "587"))
     smtp_user = os.environ.get("SMTP_USER", "")
@@ -76,6 +98,9 @@ def _send_via_smtp(to_email: str, subject: str, html: str) -> None:
     msg["Subject"] = subject
     msg["From"]    = from_addr
     msg["To"]      = to_email
+    if list_unsubscribe_url:
+        msg["List-Unsubscribe"]      = f"<{list_unsubscribe_url}>"
+        msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     msg.attach(MIMEText(html, "html"))
 
     with smtplib.SMTP(smtp_host, smtp_port) as server:

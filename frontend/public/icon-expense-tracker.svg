@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Expense Tracker brand mark.
+  Same rounded gradient tile as SubTracker (sister apps share the
+  family) but with three overlapping circles linked by a slim arc,
+  reading as "shared expense between people". Recognisable at 16px.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Expense Tracker">
+  <defs>
+    <linearGradient id="et-bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#a78bfa"/>
+      <stop offset="50%"  stop-color="#c084fc"/>
+      <stop offset="100%" stop-color="#f0abfc"/>
+    </linearGradient>
+    <radialGradient id="et-orb-a" cx="50%" cy="40%" r="60%">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.85"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#et-bg)"/>
+  <!-- soft top wash for depth -->
+  <path d="M14 14 Q14 14 50 14 L50 22 Q40 18 14 22 Z" fill="#ffffff" opacity="0.10"/>
+  <!-- connecting arc — the "shared" thread linking three members -->
+  <path d="M18 42 Q32 48 46 42" stroke="#ffffff" stroke-opacity="0.35" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <!-- three members as overlapping orbs — center is the active "you" -->
+  <circle cx="20" cy="40" r="9"  fill="url(#et-orb-a)" opacity="0.85"/>
+  <circle cx="44" cy="40" r="9"  fill="url(#et-orb-a)" opacity="0.85"/>
+  <circle cx="32" cy="28" r="11" fill="url(#et-orb-a)"/>
+  <!-- tiny gradient dot in the center orb (settle/center pivot) -->
+  <circle cx="32" cy="28" r="3.5" fill="url(#et-bg)"/>
+</svg>

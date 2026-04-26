@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { Grid3x3, Wallet, Users, ArrowRight, Check } from "lucide-react";
+import { Grid3x3, ArrowRight, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { navigate } from "@/lib/router";
+import { SubTrackerIcon, ExpenseTrackerIcon } from "@/lib/appIcons";
 
 /**
  * Cross-app switcher used in the header of both Dashboard and TrackersApp.
@@ -20,14 +21,14 @@ const APPS = [
     label: "SubTracker",
     hint:  "Personal finance dashboard",
     href:  "/",
-    icon:  Wallet,
+    icon:  SubTrackerIcon,
   },
   {
     id:    "trackers",
     label: "Expense Tracker",
-    hint:  "Split trackers, daily expenses, dinners — anything shared",
+    hint:  "Split trips, daily expenses, dinners — anything shared",
     href:  "/trackers",
-    icon:  Users,
+    icon:  ExpenseTrackerIcon,
   },
 ] as const;
 
@@ -104,14 +105,18 @@ export function AppSwitcher({ current }: { current: AppId }) {
                         : "hover:bg-zinc-800/70",
                     )}
                   >
-                    <span className={cn(
-                      "h-9 w-9 rounded-lg flex items-center justify-center shrink-0 border",
-                      isCurrent
-                        ? "bg-zinc-700/60 border-zinc-600 text-zinc-300"
-                        : "bg-violet-500/15 border-violet-500/30 text-violet-300",
-                    )}>
-                      <Icon size={15} />
-                    </span>
+                    {/* Brand mark — the gradient SVG already carries
+                        all the visual weight, so we drop the extra
+                        chip background and let it sit on the surface.
+                        Faded slightly when this is the *current* app
+                        so the active row still reads "selected". */}
+                    <Icon
+                      size={36}
+                      className={cn(
+                        "shrink-0 rounded-lg",
+                        isCurrent ? "opacity-60" : "shadow-md shadow-violet-900/30",
+                      )}
+                    />
                     <span className="flex-1 min-w-0">
                       <div className="text-sm text-zinc-100 flex items-center gap-1.5">
                         {a.label}

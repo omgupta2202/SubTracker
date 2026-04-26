@@ -14,7 +14,12 @@ export default defineConfig({
      */
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["favicon.ico", "apple-touch-icon.png", "vite.svg"],
+      includeAssets: [
+        "favicon.ico",
+        "apple-touch-icon.png",
+        "icon-subtracker.svg",
+        "icon-expense-tracker.svg",
+      ],
       manifest: {
         name: "SubTracker",
         short_name: "SubTracker",

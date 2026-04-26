@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Users, Receipt, Loader2, ExternalLink, Pencil,
+  Receipt, Loader2, ExternalLink, Pencil,
   Search, X, Trash2, Plus, TrendingUp, TrendingDown,
 } from "lucide-react";
+import { ExpenseTrackerIcon } from "@/lib/appIcons";
 import { cn } from "@/lib/utils";
 import { inrCompact, inr, relativeTime, fullTimestamp } from "@/lib/tokens";
-import * as api from "@/services/api";
-import type { TrackerDetail, TrackerMember, TrackerExpense, TrackerExpenseSplit } from "@/services/api";
+import * as api from "./api";
+import { colorChip, colorDot } from "./ExpenseTrackerApp";
+import type { TrackerDetail, TrackerMember, TrackerExpense, TrackerExpenseSplit } from "./api";
 
 /**
  * Guest entry point — opened by anyone holding the magic-link from an
@@ -89,7 +91,7 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
     <div className="min-h-screen bg-zinc-950">
       <header className="sticky top-0 z-10 backdrop-blur-md bg-zinc-950/85 border-b border-zinc-800/60">
         <div className="max-w-[760px] mx-auto px-5 py-3 flex items-center gap-3">
-          <Users size={16} className="text-violet-400" />
+          <ExpenseTrackerIcon size={26} className="shrink-0 rounded-md shadow-sm shadow-violet-900/30" />
           <div className="min-w-0 flex-1">
             <h1 className="text-base font-semibold text-zinc-100 truncate">{tracker.name}</h1>
             <p className="text-[11px] text-zinc-500 truncate">
@@ -205,6 +207,7 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
                 key={e.id}
                 expense={e}
                 members={tracker.members}
+                categories={tracker.categories}
                 onEdit={() => setSheet(e)}
                 onDelete={async () => {
                   if (!confirm("Delete this expense?")) return;
@@ -259,10 +262,11 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
 /* ── Guest expense row with edit + delete ── */
 
 function GuestExpenseRow({
-  expense, members, onEdit, onDelete,
+  expense, members, categories, onEdit, onDelete,
 }: {
   expense: TrackerExpense;
   members: TrackerMember[];
+  categories?: { id: string; name: string; color: string }[];
   onEdit: () => void;
   onDelete: () => Promise<void>;
 }) {
@@ -270,17 +274,29 @@ function GuestExpenseRow({
   const payer = members.find(m => m.id === expense.payer_id);
   const multi = (expense.payments?.length ?? 0) > 1;
   const payerLabel = multi ? `${expense.payments.length} paid` : `${payer?.display_name ?? "?"} paid`;
+  const cat = expense.category_id ? categories?.find(c => c.id === expense.category_id) : null;
   return (
     <div className="border-b border-zinc-800/40 last:border-b-0 hover:bg-zinc-800/20 transition-colors">
       <div className="px-3 sm:px-4 py-3 flex items-center gap-3">
         <button onClick={() => setOpen(o => !o)}
                 className="flex items-center gap-3 flex-1 min-w-0 text-left"
                 title="Click to see split details">
-          <span className="h-8 w-8 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-300 shrink-0">
+          <span className={cn(
+            "h-8 w-8 rounded-lg flex items-center justify-center shrink-0 border",
+            cat ? colorChip(cat.color) : "bg-violet-500/10 border-violet-500/20 text-violet-300",
+          )}>
             <Receipt size={14} />
           </span>
           <div className="flex-1 min-w-0">
-            <div className="text-sm text-zinc-100 truncate">{expense.description}</div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-zinc-100 truncate">{expense.description}</span>
+              {cat && (
+                <span className={cn("text-[10px] px-1.5 py-0.5 rounded border inline-flex items-center gap-1 shrink-0", colorChip(cat.color))}>
+                  <span className={cn("w-1.5 h-1.5 rounded-full", colorDot(cat.color))} />
+                  {cat.name}
+                </span>
+              )}
+            </div>
             <div className="text-[11px] text-zinc-500 num truncate">
               {payerLabel} · {expense.expense_date}
               <span className="ml-1 text-zinc-600" title={`Added ${fullTimestamp(expense.created_at)}`}>
@@ -494,6 +510,7 @@ function ExpenseSheetGuest({
         paymentKind: "single" as const,
         singlePayer: tracker.me.id,
         paid: {} as Record<string, string>,
+        categoryId: "" as string,
       };
     }
     const includedIds = new Set(existing.splits.map(s => s.member_id));
@@ -508,6 +525,7 @@ function ExpenseSheetGuest({
       paymentKind: (isMulti ? "partial" : "single") as "single" | "partial",
       singlePayer: existing.payer_id,
       paid: paidRec,
+      categoryId: existing.category_id ?? "",
     };
   }, [existing, tracker.members, tracker.me.id]);
 
@@ -518,7 +536,24 @@ function ExpenseSheetGuest({
   const [paymentKind, setPaymentKind] = useState<"single" | "partial">(initial.paymentKind);
   const [singlePayer, setSinglePayer] = useState<string>(initial.singlePayer);
   const [paid, setPaid]               = useState<Record<string, string>>(initial.paid);
+  const [categoryId, setCategoryId]   = useState<string>(initial.categoryId);
+  const [creatingCat, setCreatingCat] = useState(false);
+  const [newCatName, setNewCatName]   = useState("");
   const [saving, setSaving]           = useState(false);
+
+  const categories = tracker.categories ?? [];
+
+  async function createCategoryInline() {
+    const name = newCatName.trim();
+    if (!name) return;
+    try {
+      const c = await api.guestCreateTrackerCategory(token, { name });
+      tracker.categories = [...categories, c];
+      setCategoryId(c.id);
+      setNewCatName("");
+      setCreatingCat(false);
+    } catch (e) { alert((e as Error).message); }
+  }
 
   const amt = Number(amount) || 0;
   const paidTotal = Object.values(paid).reduce((s, v) => s + (Number(v) || 0), 0);
@@ -570,6 +605,7 @@ function ExpenseSheetGuest({
         split_kind: kind,
         splits,
         payments,
+        category_id: categoryId || null,
       };
       if (existing) {
         await api.guestUpdateTrackerExpense(token, existing.id, payload);
@@ -599,6 +635,40 @@ function ExpenseSheetGuest({
                    value={date} onChange={e => setDate(e.target.value)} />
           </Field>
         </div>
+
+        <Field label="Category" hint="Tag this expense — used in stats and per-category breakdown.">
+          {!creatingCat ? (
+            <div className="flex items-center gap-2">
+              <select className={cn(inputCls, "flex-1")} value={categoryId} onChange={e => setCategoryId(e.target.value)}>
+                <option value="">— No category —</option>
+                {categories.map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
+              </select>
+              <button type="button" onClick={() => setCreatingCat(true)}
+                      className="px-2.5 py-1.5 rounded-md text-xs text-violet-300 hover:text-violet-200 border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/15 inline-flex items-center gap-1">
+                <Plus size={11} /> new
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <input autoFocus className={cn(inputCls, "flex-1")} placeholder="Category name (e.g. Food, Lodging)"
+                     value={newCatName} onChange={e => setNewCatName(e.target.value)}
+                     onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void createCategoryInline(); } }} />
+              <button type="button" onClick={() => void createCategoryInline()}
+                      className="px-2.5 py-1.5 rounded-md text-xs text-emerald-300 border border-emerald-500/30 bg-emerald-500/10">add</button>
+              <button type="button" onClick={() => { setCreatingCat(false); setNewCatName(""); }}
+                      className="px-2.5 py-1.5 rounded-md text-xs text-zinc-500 hover:text-zinc-200">cancel</button>
+            </div>
+          )}
+          {categoryId && (() => {
+            const c = categories.find(x => x.id === categoryId);
+            return c ? (
+              <span className={cn("mt-1.5 self-start inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px]", colorChip(c.color))}>
+                <span className={cn("w-1.5 h-1.5 rounded-full", colorDot(c.color))} />
+                {c.name}
+              </span>
+            ) : null;
+          })()}
+        </Field>
 
         <Field label="Paid by" hint="Who actually paid the bill. Use Partial when more than one person chipped in.">
           <div className="flex items-center gap-1 mb-2">

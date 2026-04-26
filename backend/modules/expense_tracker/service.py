@@ -31,10 +31,123 @@ from db import fetchall, fetchone, execute, execute_void
 log = logging.getLogger(__name__)
 
 
+# ── Templates ───────────────────────────────────────────────────────────────
+#
+# Pre-cooked category lists you can pick at tracker-creation time so a
+# new group isn't staring at a blank screen. Each template is a slug +
+# label + suggested category list. The server seeds the categories
+# atomically when the tracker is created.
+
+TRACKER_TEMPLATES: Dict[str, Dict[str, Any]] = {
+    "blank": {
+        "label": "Blank",
+        "description": "Start empty — add your own categories as you go.",
+        "icon": "circle",
+        "categories": [],
+    },
+    "trip": {
+        "label": "Trip",
+        "description": "A vacation: travel, lodging, food, fun.",
+        "icon": "plane",
+        "categories": [
+            {"name": "Travel",      "color": "sky"},
+            {"name": "Lodging",     "color": "violet"},
+            {"name": "Food",        "color": "amber"},
+            {"name": "Activities",  "color": "fuchsia"},
+            {"name": "Shopping",    "color": "rose"},
+            {"name": "Misc",        "color": "zinc"},
+        ],
+    },
+    "home": {
+        "label": "Home expenses",
+        "description": "Roommates / household — rent, utilities, groceries.",
+        "icon": "home",
+        "categories": [
+            {"name": "Rent",        "color": "violet"},
+            {"name": "Utilities",   "color": "amber"},
+            {"name": "Groceries",   "color": "emerald"},
+            {"name": "Internet",    "color": "sky"},
+            {"name": "Maintenance", "color": "orange"},
+            {"name": "Other",       "color": "zinc"},
+        ],
+    },
+    "birthday": {
+        "label": "Birthday / party",
+        "description": "Cake, decor, gifts, venue — anyone chips in.",
+        "icon": "gift",
+        "categories": [
+            {"name": "Venue",       "color": "violet"},
+            {"name": "Food & cake", "color": "amber"},
+            {"name": "Drinks",      "color": "rose"},
+            {"name": "Decor",       "color": "fuchsia"},
+            {"name": "Gift",        "color": "emerald"},
+        ],
+    },
+    "shopping": {
+        "label": "Shopping run",
+        "description": "Group shop with shared cost split — fashion, gadgets, etc.",
+        "icon": "shopping-bag",
+        "categories": [
+            {"name": "Clothing",    "color": "fuchsia"},
+            {"name": "Electronics", "color": "sky"},
+            {"name": "Home goods",  "color": "amber"},
+            {"name": "Other",       "color": "zinc"},
+        ],
+    },
+    "dinner_club": {
+        "label": "Dinner club",
+        "description": "Recurring meal-out group — split each night's bill.",
+        "icon": "utensils",
+        "categories": [
+            {"name": "Food",   "color": "amber"},
+            {"name": "Drinks", "color": "rose"},
+            {"name": "Tip",    "color": "emerald"},
+        ],
+    },
+    "couple": {
+        "label": "Couple budget",
+        "description": "Two people, one shared ledger.",
+        "icon": "heart",
+        "categories": [
+            {"name": "Rent",       "color": "violet"},
+            {"name": "Groceries",  "color": "emerald"},
+            {"name": "Eating out", "color": "amber"},
+            {"name": "Travel",     "color": "sky"},
+            {"name": "Date night", "color": "rose"},
+            {"name": "Other",      "color": "zinc"},
+        ],
+    },
+    "office": {
+        "label": "Office / team",
+        "description": "Team lunches, offsites, supplies.",
+        "icon": "briefcase",
+        "categories": [
+            {"name": "Lunches",   "color": "amber"},
+            {"name": "Offsites",  "color": "violet"},
+            {"name": "Supplies",  "color": "zinc"},
+            {"name": "Travel",    "color": "sky"},
+        ],
+    },
+}
+
+
+def list_templates() -> List[dict]:
+    """Return all templates as a list (for the frontend picker)."""
+    return [
+        {"slug": slug, **{k: v for k, v in tpl.items() if k != "categories"},
+         "categories": tpl["categories"]}
+        for slug, tpl in TRACKER_TEMPLATES.items()
+    ]
+
+
 # ── Tracker CRUD ────────────────────────────────────────────────────────────────
 
 def create_tracker(creator_id: str, name: str, *, start_date=None, end_date=None,
-                currency: str = "INR", note: Optional[str] = None) -> dict:
+                currency: str = "INR", note: Optional[str] = None,
+                template: Optional[str] = None) -> dict:
+    """Create a tracker. If `template` matches a known slug, the matching
+    set of pre-cooked categories is seeded so the user can start tagging
+    expenses immediately. Unknown templates fall back to "blank"."""
     tracker = execute(
         """
         INSERT INTO trackers (creator_id, name, start_date, end_date, currency, note)
@@ -49,6 +162,16 @@ def create_tracker(creator_id: str, name: str, *, start_date=None, end_date=None
         tracker["id"], creator["email"], creator.get("name") or creator["email"].split("@")[0],
         invite_status="creator", user_id=creator_id, invite_token=None,
     )
+    # Seed categories from the template (skipped silently for "blank" or
+    # unknown slugs — empty categories list).
+    tpl = TRACKER_TEMPLATES.get(template or "", TRACKER_TEMPLATES["blank"])
+    for cat in tpl.get("categories", []):
+        try:
+            create_category(tracker["id"], cat["name"], cat.get("color", "violet"))
+        except ValueError:
+            # Don't fail tracker creation just because a seed category had
+            # a bad name — just skip it.
+            pass
     return get_tracker(tracker["id"], creator_id)
 
 
@@ -340,6 +463,61 @@ def remove_member(tracker_id: str, member_id: str, requester_id: str) -> bool:
     return True
 
 
+def leave_tracker(tracker_id: str, user_id: str) -> dict:
+    """Member self-removal. Returns {"ok": bool, "reason": str|None}.
+
+    Refuses for:
+      - the tracker creator (they should `delete_tracker` instead)
+      - members who have any expense activity (deleting them would
+        break the math; they have to delete those expenses first)
+    """
+    me = member_for_user(tracker_id, user_id)
+    if not me:
+        return {"ok": False, "reason": "not_a_member"}
+    if me["invite_status"] == "creator":
+        return {"ok": False, "reason": "creator_cannot_leave"}
+    has_activity = fetchone(
+        """
+        SELECT 1 FROM tracker_expenses WHERE payer_id=%s
+        UNION
+        SELECT 1 FROM tracker_expense_splits WHERE member_id=%s
+        UNION
+        SELECT 1 FROM tracker_expense_payments WHERE member_id=%s
+        LIMIT 1
+        """,
+        (me["id"], me["id"], me["id"]),
+    )
+    if has_activity:
+        return {"ok": False, "reason": "has_activity"}
+    execute_void("DELETE FROM tracker_members WHERE id=%s", (me["id"],))
+    return {"ok": True, "reason": None}
+
+
+def cancel_invite(tracker_id: str, member_id: str, requester_id: str) -> dict:
+    """Cancel a pending invite. Differs from `remove_member` only in the
+    error messages — kept as a separate verb so the route can pretend
+    the member never existed for someone holding an old magic-link.
+
+    Returns {"ok": bool, "reason": str|None}. Refuses for non-creators,
+    for members who already joined (use remove_member), and for the
+    tracker creator."""
+    if not _is_creator(tracker_id, requester_id):
+        return {"ok": False, "reason": "not_creator"}
+    member = fetchone(
+        "SELECT id, invite_status FROM tracker_members WHERE id=%s AND tracker_id=%s",
+        (member_id, tracker_id),
+    )
+    if not member:
+        return {"ok": False, "reason": "not_found"}
+    if member["invite_status"] == "creator":
+        return {"ok": False, "reason": "is_creator"}
+    if member["invite_status"] == "joined":
+        return {"ok": False, "reason": "already_joined"}
+    # Pending — drop the row so the magic-link 404s on next use.
+    execute_void("DELETE FROM tracker_members WHERE id=%s", (member_id,))
+    return {"ok": True, "reason": None}
+
+
 def join_via_token(invite_token: str, claiming_user_id: Optional[str] = None) -> Optional[dict]:
     """Mark a member as joined. If a SubTracker user_id is provided, link them."""
     row = fetchone(
@@ -560,6 +738,26 @@ def update_expense(expense_id: str, fields: Dict[str, Any]) -> Optional[dict]:
     return fetchone("SELECT * FROM tracker_expenses WHERE id=%s", (expense_id,))
 
 
+def can_delete_expense(expense_id: str, *, requester_member_id: str, tracker_id: str) -> bool:
+    """Only the expense's `created_by` member OR the tracker creator can
+    delete an expense. The "creator owns it" rule keeps members from
+    rewriting history; the tracker creator can still clean up if a member
+    leaves a bad row behind."""
+    exp = fetchone(
+        "SELECT created_by FROM tracker_expenses WHERE id=%s",
+        (expense_id,),
+    )
+    if not exp:
+        return False
+    if exp.get("created_by") and str(exp["created_by"]) == str(requester_member_id):
+        return True
+    creator = fetchone(
+        "SELECT id FROM tracker_members WHERE tracker_id=%s AND invite_status='creator' LIMIT 1",
+        (tracker_id,),
+    )
+    return bool(creator and str(creator["id"]) == str(requester_member_id))
+
+
 def delete_expense(expense_id: str) -> bool:
     execute_void("DELETE FROM tracker_expenses WHERE id=%s", (expense_id,))
     return True
@@ -657,6 +855,125 @@ def compute_settlement(tracker_id: str) -> dict:
         "balances":  balances,
         "transfers": transfers,
     }
+
+
+# ── Bulk import (Excel / CSV) ──────────────────────────────────────────────
+
+def import_expenses(
+    tracker_id: str,
+    rows: List[Dict[str, Any]],
+    *,
+    creator_member_id: Optional[str] = None,
+    create_missing_categories: bool = True,
+) -> Dict[str, Any]:
+    """Bulk-create expenses from a parsed sheet.
+
+    Each row dict is expected to look like:
+      {
+        "description": str,            (required)
+        "amount":      float,          (required, > 0)
+        "expense_date": "YYYY-MM-DD",  (optional, defaults today)
+        "category":    str | None,     (optional — name; resolved or auto-created)
+        "payer":       str,            (member display_name OR email — resolved by case-insensitive match; falls back to creator)
+        "split_with":  list[str] | None  (member names; default = all)
+        "note":        str | None,
+      }
+
+    Returns a per-row report so the UI can highlight which rows failed.
+    Bad rows are skipped (we don't roll back the good ones — partial
+    progress is more useful than "all or nothing" on a sheet of 50).
+    """
+    members = fetchall("SELECT id, email, display_name FROM tracker_members WHERE tracker_id=%s", (tracker_id,))
+    by_name  = {(m.get("display_name") or "").strip().lower(): m for m in members if m.get("display_name")}
+    by_email = {(m.get("email") or "").strip().lower(): m for m in members if m.get("email")}
+
+    cats = {c["name"].strip().lower(): c for c in list_categories(tracker_id)}
+
+    def resolve_member(label: Any) -> Optional[dict]:
+        s = str(label or "").strip().lower()
+        if not s:
+            return None
+        return by_name.get(s) or by_email.get(s)
+
+    def resolve_category(label: Any) -> Optional[str]:
+        s = str(label or "").strip()
+        if not s:
+            return None
+        existing = cats.get(s.lower())
+        if existing:
+            return existing["id"]
+        if not create_missing_categories:
+            return None
+        try:
+            c = create_category(tracker_id, s)
+            cats[c["name"].strip().lower()] = c
+            return c["id"]
+        except ValueError:
+            return None
+
+    created = 0
+    errors: List[Dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        try:
+            desc = (row.get("description") or "").strip()
+            if not desc:
+                raise ValueError("missing description")
+            try:
+                amt = float(row.get("amount"))
+            except (TypeError, ValueError):
+                raise ValueError("amount must be a number")
+            if amt <= 0:
+                raise ValueError("amount must be > 0")
+
+            payer = resolve_member(row.get("payer"))
+            if not payer:
+                # Fall back to the importer (so a sheet without a payer column
+                # still works for personal "I paid for everything" lists).
+                if creator_member_id:
+                    payer = next((m for m in members if str(m["id"]) == str(creator_member_id)), None)
+            if not payer:
+                raise ValueError(f"unknown payer: {row.get('payer')!r}")
+
+            # Optional split_with — if present and not "all", restrict.
+            sw = row.get("split_with")
+            splits = None
+            split_kind = "equal"
+            if sw and isinstance(sw, list) and len(sw) > 0:
+                resolved = [resolve_member(x) for x in sw]
+                resolved = [m for m in resolved if m]
+                if resolved and len(resolved) != len(members):
+                    split_kind = "custom"
+                    per = round(amt / len(resolved), 2)
+                    drift = round(amt - per * len(resolved), 2)
+                    splits = [{"member_id": str(m["id"]), "share": (per + drift) if i == 0 else per}
+                              for i, m in enumerate(resolved)]
+
+            cat_id = resolve_category(row.get("category"))
+
+            exp_date = None
+            if row.get("expense_date"):
+                try:
+                    exp_date = datetime.fromisoformat(str(row["expense_date"])).date()
+                except Exception:
+                    exp_date = None
+
+            add_expense(
+                tracker_id,
+                payer_id=str(payer["id"]),
+                description=desc,
+                amount=amt,
+                expense_date=exp_date,
+                split_kind=split_kind,
+                splits=splits,
+                note=(row.get("note") or None),
+                category_id=cat_id,
+                created_by=creator_member_id,
+            )
+            created += 1
+        except Exception as exc:
+            errors.append({"row": idx + 1, "error": str(exc)})
+
+    return {"created": created, "errors": errors, "total": len(rows)}
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
