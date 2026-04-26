@@ -1,5 +1,5 @@
 -- Magic-link tokens for email action buttons (mark-paid, snooze, UPI).
--- Reused later for trip-invite flow (action='trip_join'). Single-use is
+-- Reused later for tracker-invite flow (action='tracker_join'). Single-use is
 -- enforced by `consumed_at`; rows kept for ~90 days for audit.
 
 CREATE TABLE IF NOT EXISTS magic_link_tokens (

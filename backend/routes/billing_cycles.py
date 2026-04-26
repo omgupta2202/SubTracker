@@ -709,7 +709,7 @@ def _statement_status(cycle: dict) -> str:
 
 def _purge_soft_deleted_same_date(account_id: str, user_id: str, statement_date: date, exclude_id: str = None) -> None:
     """
-    Cleanup legacy soft-deleted duplicates that can still trip UNIQUE(account_id, statement_date).
+    Cleanup legacy soft-deleted duplicates that can still tracker UNIQUE(account_id, statement_date).
     """
     if exclude_id:
         execute_void(

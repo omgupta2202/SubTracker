@@ -17,7 +17,11 @@
       "Bash(grep -n \"^    </div>$\\\\|^  \\);$\\\\|^}\" /Users/omgupta/Desktop/ai_session/subtracker/frontend/src/components/TripsApp.tsx)",
       "Bash(python3 -c \"import py_compile; [py_compile.compile\\(f, doraise=True\\) for f in ['services/trips.py', 'routes/trips.py']]; print\\('ok'\\)\")",
       "Bash(echo \"exit=$?\")",
-      "Bash(python3 -c \"from routes.trips import bp, guest_bp; from routes.expense_tracker import bp as bp2, guest_bp as g2; from services import trips, expense_tracker; assert bp is bp2 and guest_bp is g2; print\\('shims OK; trips.delete_trip:', hasattr\\(trips, 'delete_trip'\\), 'expense_tracker.delete_trip:', hasattr\\(expense_tracker, 'delete_trip'\\)\\)\")"
+      "Bash(python3 -c \"from routes.trips import bp, guest_bp; from routes.expense_tracker import bp as bp2, guest_bp as g2; from services import trips, expense_tracker; assert bp is bp2 and guest_bp is g2; print\\('shims OK; trips.delete_trip:', hasattr\\(trips, 'delete_trip'\\), 'expense_tracker.delete_trip:', hasattr\\(expense_tracker, 'delete_trip'\\)\\)\")",
+      "Bash(mv add_trip_categories.sql add_tracker_categories.sql)",
+      "Bash(mv add_trip_expense_payments.sql add_tracker_expense_payments.sql)",
+      "Bash(mv add_trips.sql add_trackers.sql)",
+      "Bash(mv rename_trips_to_trackers.sql rename_to_trackers.sql)"
     ]
   }
 }

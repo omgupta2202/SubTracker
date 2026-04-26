@@ -23,7 +23,7 @@ function getAuthHeaders(): Record<string, string> {
  * the token had been hydrated) would log the user out and reload the
  * page, undoing their work.
  *
- * The fix: only declare the user logged-out after a *confirming* round-trip
+ * The fix: only declare the user logged-out after a *confirming* round-tracker
  * against `/auth/me`. That endpoint is cheap and authoritative — if the
  * token is actually invalid/expired it will 401; if not, the original
  * 401 was transient and we simply throw so the caller can retry.
@@ -378,8 +378,8 @@ export const snoozeAttention = (item_key: string, days: number = 3) =>
     { method: "POST", body: JSON.stringify({ item_key, days }) },
   );
 
-// ── Trips ─────────────────────────────────────────────────────────────────
-export interface TripSummary {
+// ── Trackers ─────────────────────────────────────────────────────────────────
+export interface TrackerSummary {
   id: string;
   creator_id: string;
   name: string;
@@ -394,14 +394,14 @@ export interface TripSummary {
   total_spent?: number;
   expenses_count?: number;
   members_count?: number;
-  /** Net balance for the current viewer in this trip (paid − share).
+  /** Net balance for the current viewer in this tracker (paid − share).
    *  Positive = they're owed; negative = they owe. NULL if the viewer
-   *  isn't a member (only possible for creator-of-empty-trip edge case). */
+   *  isn't a member (only possible for creator-of-empty-tracker edge case). */
   my_balance?: number | null;
 }
-export interface TripMember {
+export interface TrackerMember {
   id: string;
-  trip_id: string;
+  tracker_id: string;
   email: string;
   display_name: string;
   user_id: string | null;
@@ -411,18 +411,27 @@ export interface TripMember {
   invited_at: string;
   joined_at: string | null;
 }
-export interface TripExpenseSplit {
+export interface TrackerExpenseSplit {
   member_id: string;
   share: number;
 }
 /** Multi-payer support — who put in money for this expense. Sum equals amount. */
-export interface TripExpensePayment {
+export interface TrackerExpensePayment {
   member_id: string;
   amount: number;
 }
-export interface TripExpense {
+export interface TrackerCategory {
   id: string;
-  trip_id: string;
+  tracker_id: string;
+  name: string;
+  /** Palette token; the frontend maps it to a tailwind class. */
+  color: "violet" | "fuchsia" | "emerald" | "amber" | "sky" | "rose" | "lime" | "orange" | "zinc";
+  position: number;
+  created_at: string;
+}
+export interface TrackerExpense {
+  id: string;
+  tracker_id: string;
   payer_id: string;          // primary/largest payer (legacy single-payer column)
   description: string;
   amount: number;
@@ -430,23 +439,27 @@ export interface TripExpense {
   expense_date: string;
   split_kind: "equal" | "custom";
   note: string | null;
+  category_id: string | null;
   created_at: string;
-  splits: TripExpenseSplit[];
-  payments: TripExpensePayment[];
+  splits: TrackerExpenseSplit[];
+  payments: TrackerExpensePayment[];
 }
-export interface TripBalance {
+export interface TrackerBalance {
   member_id: string;
   display_name: string;
   paid: number;
   owed: number;
   net: number;
 }
-export interface TripDetail extends TripSummary {
-  members: TripMember[];
-  expenses: TripExpense[];
-  balances: TripBalance[];
+export interface TrackerDetail extends TrackerSummary {
+  members: TrackerMember[];
+  expenses: TrackerExpense[];
+  balances: TrackerBalance[];
+  /** Categories defined for this tracker. Optional on legacy responses
+   *  served before the tracker_categories migration was applied. */
+  categories?: TrackerCategory[];
 }
-export interface TripTransfer {
+export interface TrackerTransfer {
   from_member_id: string;
   from_display_name: string;
   to_member_id: string;
@@ -454,26 +467,26 @@ export interface TripTransfer {
   to_upi_id: string | null;
   amount: number;
 }
-export interface TripSettlement {
-  balances: TripBalance[];
-  transfers: TripTransfer[];
+export interface TrackerSettlement {
+  balances: TrackerBalance[];
+  transfers: TrackerTransfer[];
 }
 
-export const listTrips     = ()        => request<TripSummary[]>("/trips/");
-export const createTrip    = (d: { name: string; start_date?: string; end_date?: string; note?: string }) =>
-  request<TripDetail>("/trips/", { method: "POST", body: JSON.stringify(d) });
-export const getTrip       = (id: string) => request<TripDetail>(`/trips/${id}`);
-export const updateTrip    = (id: string, d: Partial<Pick<TripSummary, "name" | "start_date" | "end_date" | "note" | "status">>) =>
-  request<TripDetail>(`/trips/${id}`, { method: "PUT", body: JSON.stringify(d) });
-export const deleteTrip    = (id: string) =>
-  request<{ deleted: boolean }>(`/trips/${id}`, { method: "DELETE" });
-export const inviteTripMember = (id: string, d: { email: string; display_name: string }) =>
-  request<TripMember>(`/trips/${id}/members`, { method: "POST", body: JSON.stringify(d) });
-export const removeTripMember = (id: string, memberId: string) =>
-  request<{ deleted: boolean }>(`/trips/${id}/members/${memberId}`, { method: "DELETE" });
-export const resendTripInvite = (id: string, memberId: string) =>
-  request<TripMember>(`/trips/${id}/members/${memberId}/resend-invite`, { method: "POST" });
-export const addTripExpense = (
+export const listTrackers     = ()        => request<TrackerSummary[]>("/trackers/");
+export const createTracker    = (d: { name: string; start_date?: string; end_date?: string; note?: string }) =>
+  request<TrackerDetail>("/trackers/", { method: "POST", body: JSON.stringify(d) });
+export const getTracker       = (id: string) => request<TrackerDetail>(`/trackers/${id}`);
+export const updateTracker    = (id: string, d: Partial<Pick<TrackerSummary, "name" | "start_date" | "end_date" | "note" | "status">>) =>
+  request<TrackerDetail>(`/trackers/${id}`, { method: "PUT", body: JSON.stringify(d) });
+export const deleteTracker    = (id: string) =>
+  request<{ deleted: boolean }>(`/trackers/${id}`, { method: "DELETE" });
+export const inviteTrackerMember = (id: string, d: { email: string; display_name: string }) =>
+  request<TrackerMember>(`/trackers/${id}/members`, { method: "POST", body: JSON.stringify(d) });
+export const removeTrackerMember = (id: string, memberId: string) =>
+  request<{ deleted: boolean }>(`/trackers/${id}/members/${memberId}`, { method: "DELETE" });
+export const resendTrackerInvite = (id: string, memberId: string) =>
+  request<TrackerMember>(`/trackers/${id}/members/${memberId}/resend-invite`, { method: "POST" });
+export const addTrackerExpense = (
   id: string,
   d: {
     payer_id: string;
@@ -481,13 +494,24 @@ export const addTripExpense = (
     amount: number;
     expense_date?: string;
     split_kind?: "equal" | "custom";
-    splits?: TripExpenseSplit[];
+    splits?: TrackerExpenseSplit[];
     /** When provided, expense is multi-payer; sum must equal amount. */
-    payments?: TripExpensePayment[];
+    payments?: TrackerExpensePayment[];
     note?: string;
+    category_id?: string | null;
   },
-) => request<TripExpense>(`/trips/${id}/expenses`, { method: "POST", body: JSON.stringify(d) });
-export const updateTripExpense = (
+) => request<TrackerExpense>(`/trackers/${id}/expenses`, { method: "POST", body: JSON.stringify(d) });
+export const listTrackerCategories  = (id: string) =>
+  request<TrackerCategory[]>(`/trackers/${id}/categories`);
+export const createTrackerCategory  = (id: string, d: { name: string; color?: TrackerCategory["color"] }) =>
+  request<TrackerCategory>(`/trackers/${id}/categories`, { method: "POST", body: JSON.stringify(d) });
+export const updateTrackerCategory  = (id: string, cid: string, d: Partial<Pick<TrackerCategory, "name" | "color" | "position">>) =>
+  request<TrackerCategory>(`/trackers/${id}/categories/${cid}`, { method: "PUT", body: JSON.stringify(d) });
+export const deleteTrackerCategory  = (id: string, cid: string) =>
+  request<{ deleted: boolean }>(`/trackers/${id}/categories/${cid}`, { method: "DELETE" });
+export const guestCreateTrackerCategory = (token: string, d: { name: string; color?: TrackerCategory["color"] }) =>
+  guestRequest<TrackerCategory>(`/trackers/guest/${token}/categories`, { method: "POST", body: JSON.stringify(d) });
+export const updateTrackerExpense = (
   id: string, eid: string,
   d: Partial<{
     payer_id: string;
@@ -495,15 +519,15 @@ export const updateTripExpense = (
     amount: number;
     expense_date: string;
     split_kind: "equal" | "custom";
-    splits: TripExpenseSplit[];
-    payments: TripExpensePayment[];
+    splits: TrackerExpenseSplit[];
+    payments: TrackerExpensePayment[];
     note: string | null;
   }>,
-) => request<TripExpense>(`/trips/${id}/expenses/${eid}`, { method: "PUT", body: JSON.stringify(d) });
-export const deleteTripExpense = (id: string, eid: string) =>
-  request<{ deleted: boolean }>(`/trips/${id}/expenses/${eid}`, { method: "DELETE" });
-export const getTripSettlement = (id: string) =>
-  request<TripSettlement>(`/trips/${id}/settlement`);
+) => request<TrackerExpense>(`/trackers/${id}/expenses/${eid}`, { method: "PUT", body: JSON.stringify(d) });
+export const deleteTrackerExpense = (id: string, eid: string) =>
+  request<{ deleted: boolean }>(`/trackers/${id}/expenses/${eid}`, { method: "DELETE" });
+export const getTrackerSettlement = (id: string) =>
+  request<TrackerSettlement>(`/trackers/${id}/settlement`);
 
 /** Guest endpoints — no JWT, the token IS auth. */
 async function guestRequest<T>(path: string, options?: RequestInit): Promise<T> {
@@ -519,9 +543,9 @@ async function guestRequest<T>(path: string, options?: RequestInit): Promise<T> 
   if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
   return json.data as T;
 }
-export const guestGetTrip = (token: string) =>
-  guestRequest<TripDetail & { me: TripMember }>(`/trips/guest/${token}`);
-export const guestAddTripExpense = (
+export const guestGetTracker = (token: string) =>
+  guestRequest<TrackerDetail & { me: TrackerMember }>(`/trackers/guest/${token}`);
+export const guestAddTrackerExpense = (
   token: string,
   d: {
     payer_id?: string;
@@ -529,12 +553,12 @@ export const guestAddTripExpense = (
     amount: number;
     expense_date?: string;
     split_kind?: "equal" | "custom";
-    splits?: TripExpenseSplit[];
-    payments?: TripExpensePayment[];
+    splits?: TrackerExpenseSplit[];
+    payments?: TrackerExpensePayment[];
     note?: string;
   },
-) => guestRequest<TripExpense>(`/trips/guest/${token}/expenses`, { method: "POST", body: JSON.stringify(d) });
-export const guestUpdateTripExpense = (
+) => guestRequest<TrackerExpense>(`/trackers/guest/${token}/expenses`, { method: "POST", body: JSON.stringify(d) });
+export const guestUpdateTrackerExpense = (
   token: string, eid: string,
   d: Partial<{
     payer_id: string;
@@ -542,15 +566,15 @@ export const guestUpdateTripExpense = (
     amount: number;
     expense_date: string;
     split_kind: "equal" | "custom";
-    splits: TripExpenseSplit[];
-    payments: TripExpensePayment[];
+    splits: TrackerExpenseSplit[];
+    payments: TrackerExpensePayment[];
     note: string | null;
   }>,
-) => guestRequest<TripExpense>(`/trips/guest/${token}/expenses/${eid}`, { method: "PUT", body: JSON.stringify(d) });
-export const guestDeleteTripExpense = (token: string, eid: string) =>
-  guestRequest<{ deleted: boolean }>(`/trips/guest/${token}/expenses/${eid}`, { method: "DELETE" });
+) => guestRequest<TrackerExpense>(`/trackers/guest/${token}/expenses/${eid}`, { method: "PUT", body: JSON.stringify(d) });
+export const guestDeleteTrackerExpense = (token: string, eid: string) =>
+  guestRequest<{ deleted: boolean }>(`/trackers/guest/${token}/expenses/${eid}`, { method: "DELETE" });
 export const guestUpdateMe = (token: string, d: { display_name?: string; upi_id?: string }) =>
-  guestRequest<TripMember>(`/trips/guest/${token}/me`, { method: "PATCH", body: JSON.stringify(d) });
+  guestRequest<TrackerMember>(`/trackers/guest/${token}/me`, { method: "PATCH", body: JSON.stringify(d) });
 
 // ── Obligations (Unified: subscriptions + EMIs + rent) ────────────────────
 export const getObligations = (type?: "subscription" | "emi" | "rent" | "insurance" | "sip" | "utility" | "other") => {

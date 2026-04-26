@@ -9,7 +9,7 @@ GET /api/dashboard/utilization    credit utilization per card
 Performance notes
 -----------------
 The summary endpoint runs several queries against the Supabase Postgres
-in Mumbai. From Render's Singapore region the round-trip is ~80ms each
+in Mumbai. From Render's Singapore region the round-tracker is ~80ms each
 and the queries are sequential, so a cold call can hit ~800ms-1.5s.
 
 Two cheap mitigations applied here:
@@ -447,7 +447,7 @@ def summary():
         ]
     attention_items.sort(key=lambda x: (x["due_date"], -float(x.get("amount") or 0)))
 
-    # Cash-flow gap totals — combined into a single round-trip.
+    # Cash-flow gap totals — combined into a single round-tracker.
     # On Render→Supabase Mumbai this saves ~240ms (3 separate fetchone
     # calls would each pay an ~80ms RTT).
     totals = fetchone(

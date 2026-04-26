@@ -2,9 +2,9 @@
  * Tiny URL router. We avoid react-router for the handful of routes
  * SubTracker actually has:
  *   /                     → Dashboard
- *   /trips                → TripsApp list view
- *   /trips/<id>           → TripsApp trip detail
- *   /trips/guest/<token>  → TripGuestRoute (public, no auth)
+ *   /trackers                → TrackersApp list view
+ *   /trackers/<id>           → TrackersApp tracker detail
+ *   /trackers/guest/<token>  → TrackerGuestRoute (public, no auth)
  *
  * Why not react-router: ~10KB and a provider tree for what's basically
  * 3 conditional branches. This module is ~30 lines and does the same job.
@@ -43,20 +43,20 @@ export function navigate(path: string, opts: { replace?: boolean } = {}): void {
 /* ── Route matchers — keep them collocated so it's obvious what URLs the
      app responds to. App.tsx imports these and switches on them. ──────── */
 
-export function matchGuestTripToken(path: string): string | null {
-  const m = path.match(/^\/trips\/guest\/([^/?#]+)/);
+export function matchGuestTrackerToken(path: string): string | null {
+  const m = path.match(/^\/trackers\/guest\/([^/?#]+)/);
   return m ? m[1] : null;
 }
 
-export interface TripsRouteMatch {
-  /** Trip detail id, or null for the list view. */
-  tripId: string | null;
+export interface TrackersRouteMatch {
+  /** Tracker detail id, or null for the list view. */
+  trackerId: string | null;
 }
 
-export function matchTripsRoute(path: string): TripsRouteMatch | null {
-  if (path === "/trips" || path === "/trips/") return { tripId: null };
-  const m = path.match(/^\/trips\/([^/?#]+)\/?$/);
+export function matchTrackersRoute(path: string): TrackersRouteMatch | null {
+  if (path === "/trackers" || path === "/trackers/") return { trackerId: null };
+  const m = path.match(/^\/trackers\/([^/?#]+)\/?$/);
   if (!m) return null;
-  if (m[1] === "guest") return null;     // /trips/guest is its own route
-  return { tripId: m[1] };
+  if (m[1] === "guest") return null;     // /trackers/guest is its own route
+  return { trackerId: m[1] };
 }

@@ -5,9 +5,9 @@ import { cn } from "@/lib/utils";
 import { navigate } from "@/lib/router";
 
 /**
- * Cross-app switcher used in the header of both Dashboard and TripsApp.
+ * Cross-app switcher used in the header of both Dashboard and TrackersApp.
  *
- * Why this exists: SubTracker (personal finance dashboard) and Trips (group
+ * Why this exists: SubTracker (personal finance dashboard) and Trackers (group
  * splitter) are *sister apps*, not features-of-each-other. The launcher
  * makes that explicit — same surface in each, the "current" app is checked,
  * the "other" app is presented as a CTA the user is encouraged to try.
@@ -23,10 +23,10 @@ const APPS = [
     icon:  Wallet,
   },
   {
-    id:    "trips",
+    id:    "trackers",
     label: "Expense Tracker",
-    hint:  "Split trips, daily expenses, dinners — anything shared",
-    href:  "/trips",
+    hint:  "Split trackers, daily expenses, dinners — anything shared",
+    href:  "/trackers",
     icon:  Users,
   },
 ] as const;
@@ -41,7 +41,7 @@ export function AppSwitcher({ current }: { current: AppId }) {
   function go(target: { id: AppId; href: string }) {
     setOpen(false);
     // Persist intent immediately so a later bare `/` revisit lands here.
-    // App.tsx's persistence effect only stamps "trips" — for "dashboard"
+    // App.tsx's persistence effect only stamps "trackers" — for "dashboard"
     // we have to be explicit, otherwise the lastApp would never flip back.
     localStorage.setItem(LAST_APP_KEY, target.id);
     navigate(target.href);
@@ -129,7 +129,7 @@ export function AppSwitcher({ current }: { current: AppId }) {
               })}
             </div>
             <div className="px-3 py-2 border-t border-zinc-800/60 text-[10px] text-zinc-500">
-              Two separate apps · same SubTracker account · your layout and trips are kept independent.
+              Two separate apps · same SubTracker account · your layout and trackers are kept independent.
             </div>
           </div>
         </>,

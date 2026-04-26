@@ -12,18 +12,18 @@ import { navigate } from "@/lib/router";
 import { AppSwitcher } from "@/components/AppSwitcher";
 import * as api from "@/services/api";
 import type {
-  TripSummary, TripDetail, TripMember, TripExpense, TripExpenseSplit,
-  TripSettlement, TripTransfer,
+  TrackerSummary, TrackerDetail, TrackerMember, TrackerExpense, TrackerExpenseSplit,
+  TrackerSettlement, TrackerTransfer,
 } from "@/services/api";
 
 /**
- * Full-screen "Expense Tracker" app (formerly "Trips"). Three views in
+ * Full-screen "Expense Tracker" app (formerly "Trackers"). Three views in
  * one component:
- *   - list   → all your trackers (trips, daily-expense groups, etc.)
+ *   - list   → all your trackers (trackers, daily-expense groups, etc.)
  *   - detail → expenses, balances, members for one tracker
  *   - settle → minimum-transfers settlement plan
  *
- * The instance-noun is still "trip" inside identifiers + DB; only the
+ * The instance-noun is still "tracker" inside identifiers + DB; only the
  * surface labels changed.
  */
 type View = "list" | "detail" | "settle";
@@ -35,19 +35,19 @@ interface Props {
   /** When true, this is the page itself (URL route) — internal navigation
    *  also pushes URL changes so back/forward + bookmarks work. */
   standalone?: boolean;
-  /** Initial trip id from the URL: e.g. /trips/<id> */
-  initialTripId?: string | null;
+  /** Initial tracker id from the URL: e.g. /trackers/<id> */
+  initialTrackerId?: string | null;
   onClose: () => void;
 }
 
-export function ExpenseTrackerApp({ open, standalone = false, initialTripId = null, onClose }: Props) {
+export function ExpenseTrackerApp({ open, standalone = false, initialTrackerId = null, onClose }: Props) {
   const isOpen = standalone || !!open;
 
-  const [view, setView]         = useState<View>(initialTripId ? "detail" : "list");
-  const [trips, setTrips]       = useState<TripSummary[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(initialTripId);
-  const [detail, setDetail]     = useState<TripDetail | null>(null);
-  const [settlement, setSettlement] = useState<TripSettlement | null>(null);
+  const [view, setView]         = useState<View>(initialTrackerId ? "detail" : "list");
+  const [trackers, setTrackers]       = useState<TrackerSummary[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(initialTrackerId);
+  const [detail, setDetail]     = useState<TrackerDetail | null>(null);
+  const [settlement, setSettlement] = useState<TrackerSettlement | null>(null);
   const [loading, setLoading]   = useState(false);
   const [creating, setCreating] = useState(false);
 
@@ -56,34 +56,34 @@ export function ExpenseTrackerApp({ open, standalone = false, initialTripId = nu
     if (!isOpen) return;
     setSettlement(null);
     void refreshList();
-    if (initialTripId) {
-      setActiveId(initialTripId);
+    if (initialTrackerId) {
+      setActiveId(initialTrackerId);
       setView("detail");
-      void loadDetail(initialTripId);
+      void loadDetail(initialTrackerId);
     } else {
       setActiveId(null);
       setView("list");
       setDetail(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, initialTripId]);
+  }, [isOpen, initialTrackerId]);
 
   async function refreshList() {
     setLoading(true);
-    try { setTrips(await api.listTrips()); }
+    try { setTrackers(await api.listTrackers()); }
     finally { setLoading(false); }
   }
 
   async function loadDetail(id: string) {
     setLoading(true);
-    try { setDetail(await api.getTrip(id)); }
+    try { setDetail(await api.getTracker(id)); }
     finally { setLoading(false); }
   }
 
-  async function openTrip(id: string) {
+  async function openTracker(id: string) {
     setActiveId(id);
     setView("detail");
-    if (standalone) navigate(`/trips/${id}`);
+    if (standalone) navigate(`/trackers/${id}`);
     await loadDetail(id);
   }
 
@@ -91,19 +91,19 @@ export function ExpenseTrackerApp({ open, standalone = false, initialTripId = nu
     setView("list");
     setActiveId(null);
     setDetail(null);
-    if (standalone) navigate("/trips");
+    if (standalone) navigate("/trackers");
   }
 
   async function reloadDetail() {
     if (!activeId) return;
-    setDetail(await api.getTrip(activeId));
+    setDetail(await api.getTracker(activeId));
   }
 
   async function openSettlement() {
     if (!activeId) return;
     setLoading(true);
     try {
-      setSettlement(await api.getTripSettlement(activeId));
+      setSettlement(await api.getTrackerSettlement(activeId));
       setView("settle");
     } finally { setLoading(false); }
   }
@@ -131,9 +131,9 @@ export function ExpenseTrackerApp({ open, standalone = false, initialTripId = nu
             {view === "settle" && "Settlement plan"}
           </h1>
           <div className="flex-1" />
-          <AppSwitcher current="trips" />
+          <AppSwitcher current="trackers" />
           <button onClick={onClose}
-                  title="Close trips and go back to SubTracker"
+                  title="Close trackers and go back to SubTracker"
                   className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70" aria-label="Close">
             <X size={18} />
           </button>
@@ -143,23 +143,23 @@ export function ExpenseTrackerApp({ open, standalone = false, initialTripId = nu
       <div className="max-w-[960px] mx-auto px-5 py-6">
         {view === "list" && (
           <ListView
-            trips={trips}
+            trackers={trackers}
             loading={loading}
             creating={creating}
             onCreate={async (name) => {
               setCreating(true);
               try {
-                const trip = await api.createTrip({ name });
+                const tracker = await api.createTracker({ name });
                 await refreshList();
-                openTrip(trip.id);
+                openTracker(tracker.id);
               } finally { setCreating(false); }
             }}
-            onOpen={openTrip}
+            onOpen={openTracker}
           />
         )}
         {view === "detail" && detail && (
           <DetailView
-            trip={detail}
+            tracker={detail}
             loading={loading}
             onChange={reloadDetail}
             onSettle={openSettlement}
@@ -168,10 +168,10 @@ export function ExpenseTrackerApp({ open, standalone = false, initialTripId = nu
         )}
         {view === "settle" && settlement && detail && (
           <SettleView
-            trip={detail}
+            tracker={detail}
             settlement={settlement}
             onClose={async () => {
-              await api.updateTrip(detail.id, { status: "settled" });
+              await api.updateTracker(detail.id, { status: "settled" });
               await reloadDetail();
               setView("detail");
             }}
@@ -186,9 +186,9 @@ export function ExpenseTrackerApp({ open, standalone = false, initialTripId = nu
 /* ────────────────────────── LIST ────────────────────────── */
 
 function ListView({
-  trips, loading, creating, onCreate, onOpen,
+  trackers, loading, creating, onCreate, onOpen,
 }: {
-  trips: TripSummary[];
+  trackers: TrackerSummary[];
   loading: boolean;
   creating: boolean;
   onCreate: (name: string) => Promise<void>;
@@ -214,12 +214,12 @@ function ListView({
   // Aggregate view-level totals so the user lands on something meaningful
   // even before opening a specific tracker.
   const overall = useMemo(() => {
-    const tot = trips.reduce((s, t) => s + Number(t.total_spent ?? 0), 0);
-    const owe = trips.reduce((s, t) => s + (Number(t.my_balance ?? 0) < 0 ? -Number(t.my_balance ?? 0) : 0), 0);
-    const owed = trips.reduce((s, t) => s + (Number(t.my_balance ?? 0) > 0 ?  Number(t.my_balance ?? 0) : 0), 0);
-    const active = trips.filter(t => t.status === "active").length;
+    const tot = trackers.reduce((s, t) => s + Number(t.total_spent ?? 0), 0);
+    const owe = trackers.reduce((s, t) => s + (Number(t.my_balance ?? 0) < 0 ? -Number(t.my_balance ?? 0) : 0), 0);
+    const owed = trackers.reduce((s, t) => s + (Number(t.my_balance ?? 0) > 0 ?  Number(t.my_balance ?? 0) : 0), 0);
+    const active = trackers.filter(t => t.status === "active").length;
     return { tot, owe, owed, active };
-  }, [trips]);
+  }, [trackers]);
 
   return (
     <div className="flex flex-col gap-6 pb-10">
@@ -230,10 +230,10 @@ function ListView({
         <div className="relative">
           <div className="text-[11px] uppercase tracking-wider font-semibold text-zinc-400 mb-1">Expense Tracker</div>
           <h2 className="text-zinc-100 text-2xl sm:text-3xl font-semibold tracking-tight max-w-xl">
-            Trips, daily spends, dinner clubs — split fairly, settle in two taps.
+            Trackers, daily spends, dinner clubs — split fairly, settle in two taps.
           </h2>
           <p className="text-sm text-zinc-400 mt-2 max-w-2xl">
-            One place for any group ledger: a Goa trip, your roommate utilities, the Friday-night
+            One place for any group ledger: a Goa tracker, your roommate utilities, the Friday-night
             dinner crew. Every payment, every share, who owes whom — and the minimum number of
             transfers to clear it all.
           </p>
@@ -271,17 +271,17 @@ function ListView({
 
       {/* List */}
       <div className="flex flex-col">
-        {loading && trips.length === 0 ? (
+        {loading && trackers.length === 0 ? (
           <div className="text-center py-12 text-zinc-500"><Loader2 size={20} className="text-violet-400 animate-spin mx-auto" /></div>
-        ) : trips.length === 0 ? (
+        ) : trackers.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-zinc-800 p-12 text-center text-sm text-zinc-500 max-w-xl mx-auto">
             <Users size={20} className="mx-auto mb-3 text-violet-400" />
             <p className="text-zinc-300 font-medium mb-1">No trackers yet.</p>
-            <p>Create one above to split a trip's costs, your roommate utilities, or anything else with shared bills.</p>
+            <p>Create one above to split a tracker's costs, your roommate utilities, or anything else with shared bills.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {trips.map(t => {
+            {trackers.map(t => {
               const myBal = Number(t.my_balance ?? 0);
               const tone =
                 myBal >  0.01 ? "emerald" :
@@ -370,38 +370,38 @@ function MiniStat({ label, value, tone }: { label: string; value: string; tone?:
 /* ────────────────────────── DETAIL ────────────────────────── */
 
 function DetailView({
-  trip, loading, onChange, onSettle, onDeleted,
+  tracker, loading, onChange, onSettle, onDeleted,
 }: {
-  trip: TripDetail;
+  tracker: TrackerDetail;
   loading: boolean;
   onChange: () => Promise<void>;
   onSettle: () => void;
   onDeleted: () => void;
 }) {
-  const [showSheet, setShowSheet]   = useState<TripExpense | "new" | null>(null);
+  const [showSheet, setShowSheet]   = useState<TrackerExpense | "new" | null>(null);
   const [showInvite, setShowInvite] = useState(false);
   const [showInfo, setShowInfo]     = useState(false);
   const [tab, setTab]               = useState<"activity" | "stats">("activity");
   const [search, setSearch]         = useState("");
 
   const totalSpent = useMemo(
-    () => trip.expenses.reduce((s, e) => s + Number(e.amount || 0), 0),
-    [trip.expenses],
+    () => tracker.expenses.reduce((s, e) => s + Number(e.amount || 0), 0),
+    [tracker.expenses],
   );
 
-  const memberStats = useMemo(() => buildMemberStats(trip), [trip]);
-  const greedyTransfers = useMemo(() => greedyDebt(trip.balances), [trip.balances]);
+  const memberStats = useMemo(() => buildMemberStats(tracker), [tracker]);
+  const greedyTransfers = useMemo(() => greedyDebt(tracker.balances), [tracker.balances]);
 
   const filteredExpenses = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return trip.expenses;
-    return trip.expenses.filter(e => {
+    if (!q) return tracker.expenses;
+    return tracker.expenses.filter(e => {
       if (e.description.toLowerCase().includes(q)) return true;
       const payerNames = (e.payments?.length ? e.payments.map(p => p.member_id) : [e.payer_id])
-        .map(id => trip.members.find(m => m.id === id)?.display_name?.toLowerCase() ?? "");
+        .map(id => tracker.members.find(m => m.id === id)?.display_name?.toLowerCase() ?? "");
       return payerNames.some(n => n.includes(q));
     });
-  }, [search, trip.expenses, trip.members]);
+  }, [search, tracker.expenses, tracker.members]);
 
   const filteredTotal = filteredExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
   const groupedExpenses = useMemo(() => groupByDate(filteredExpenses), [filteredExpenses]);
@@ -416,20 +416,20 @@ function DetailView({
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <span className="text-[11px] uppercase tracking-wider font-semibold text-zinc-400">Total spent</span>
-              {trip.status !== "active" && (
+              {tracker.status !== "active" && (
                 <span className={cn(
                   "text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border",
-                  trip.status === "settled"  ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/30" :
+                  tracker.status === "settled"  ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/30" :
                                                "text-zinc-400 bg-zinc-800/50 border-zinc-700",
-                )}>{trip.status}</span>
+                )}>{tracker.status}</span>
               )}
             </div>
             <div className="num text-4xl sm:text-5xl font-semibold text-zinc-100 tracking-tight">{inrCompact(totalSpent)}</div>
             <div className="text-xs text-zinc-500 mt-2">
-              {trip.expenses.length} expense{trip.expenses.length !== 1 ? "s" : ""} · {trip.members.length} member{trip.members.length !== 1 ? "s" : ""}
-              {(trip.start_date || trip.end_date) && <span className="ml-1.5 text-zinc-600 num">· {trip.start_date}{trip.end_date && ` – ${trip.end_date}`}</span>}
+              {tracker.expenses.length} expense{tracker.expenses.length !== 1 ? "s" : ""} · {tracker.members.length} member{tracker.members.length !== 1 ? "s" : ""}
+              {(tracker.start_date || tracker.end_date) && <span className="ml-1.5 text-zinc-600 num">· {tracker.start_date}{tracker.end_date && ` – ${tracker.end_date}`}</span>}
             </div>
-            {trip.note && <p className="text-xs text-zinc-500 mt-2 max-w-xl line-clamp-2">{trip.note}</p>}
+            {tracker.note && <p className="text-xs text-zinc-500 mt-2 max-w-xl line-clamp-2">{tracker.note}</p>}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
@@ -438,7 +438,7 @@ function DetailView({
               className="p-2 rounded-lg border border-zinc-700/70 hover:bg-zinc-800/60 text-zinc-300"
             ><Settings2 size={14} /></button>
             <button
-              onClick={() => exportTripCsv(trip)}
+              onClick={() => exportTrackerCsv(tracker)}
               title="Download all expenses as a CSV file"
               className="p-2 rounded-lg border border-zinc-700/70 hover:bg-zinc-800/60 text-zinc-300"
             ><Download size={14} /></button>
@@ -464,8 +464,8 @@ function DetailView({
       <section>
         <SectionTitle>Members</SectionTitle>
         <div className="flex flex-wrap gap-2 mt-2">
-          {trip.members.map(m => {
-            const bal = trip.balances.find(b => b.member_id === m.id);
+          {tracker.members.map(m => {
+            const bal = tracker.balances.find(b => b.member_id === m.id);
             const net = bal?.net ?? 0;
             // We show the remove (×) chip on every member except the creator
             // — the backend enforces the creator-only check anyway, and also
@@ -507,7 +507,7 @@ function DetailView({
                     onClick={async () => {
                       if (!confirm(`Remove ${m.display_name} from this tracker? They have no expenses, so balances stay intact.`)) return;
                       try {
-                        await api.removeTripMember(trip.id, m.id);
+                        await api.removeTrackerMember(tracker.id, m.id);
                         await onChange();
                       } catch (err) { alert((err as Error).message); }
                     }}
@@ -528,7 +528,7 @@ function DetailView({
           })}
           <button
             onClick={() => setShowInvite(true)}
-            title="Invite another member to this trip"
+            title="Invite another member to this tracker"
             className="rounded-full border border-dashed border-zinc-700 px-3 py-1.5 text-xs text-zinc-500 hover:text-zinc-200 hover:border-zinc-500"
           >
             + invite
@@ -588,11 +588,11 @@ function DetailView({
                     <ExpenseRow
                       key={e.id}
                       expense={e}
-                      members={trip.members}
+                      members={tracker.members}
                       onEdit={() => setShowSheet(e)}
                       onDelete={async () => {
                         if (!confirm("Delete this expense?")) return;
-                        await api.deleteTripExpense(trip.id, e.id);
+                        await api.deleteTrackerExpense(tracker.id, e.id);
                         await onChange();
                       }}
                     />
@@ -605,7 +605,7 @@ function DetailView({
       )}
 
       {tab === "stats" && (
-        <StatsPanel trip={trip} stats={memberStats} transfers={greedyTransfers} />
+        <StatsPanel tracker={tracker} stats={memberStats} transfers={greedyTransfers} />
       )}
 
       {/* Sticky bottom action bar — primary "Add expense" always within thumb reach */}
@@ -623,7 +623,7 @@ function DetailView({
 
       {showSheet && (
         <ExpenseSheet
-          trip={trip}
+          tracker={tracker}
           existing={showSheet === "new" ? undefined : showSheet}
           onClose={() => setShowSheet(null)}
           onSaved={async () => { setShowSheet(null); await onChange(); }}
@@ -631,14 +631,14 @@ function DetailView({
       )}
       {showInvite && (
         <InviteSheet
-          trip={trip}
+          tracker={tracker}
           onClose={() => setShowInvite(false)}
           onInvited={async () => { await onChange(); }}
         />
       )}
       {showInfo && (
-        <TripInfoSheet
-          trip={trip}
+        <TrackerInfoSheet
+          tracker={tracker}
           onClose={() => setShowInfo(false)}
           onSaved={async () => { setShowInfo(false); await onChange(); }}
           onDeleted={() => { setShowInfo(false); onDeleted(); }}
@@ -657,8 +657,8 @@ function DetailView({
 function ExpenseRow({
   expense, members, onEdit, onDelete,
 }: {
-  expense: TripExpense;
-  members: TripMember[];
+  expense: TrackerExpense;
+  members: TrackerMember[];
   onEdit?: () => void;
   onDelete: () => Promise<void>;
 }) {
@@ -737,16 +737,16 @@ function ExpenseRow({
 
 /* ────────────────────────── ADD / EDIT EXPENSE ──────────────────────────
    Single sheet handles both add and edit. When `existing` is provided, state
-   is hydrated from it and Save calls updateTripExpense; otherwise it's a
+   is hydrated from it and Save calls updateTrackerExpense; otherwise it's a
    blank create form. Keeping one sheet avoids drift between the two flows.
    ───────────────────────────────────────────────────────────────────── */
 
 function ExpenseSheet({
-  trip, existing, onClose, onSaved,
+  tracker, existing, onClose, onSaved,
 }: {
-  trip: TripDetail;
+  tracker: TrackerDetail;
   /** Optional — when set, the sheet edits this expense in place. */
-  existing?: TripExpense;
+  existing?: TrackerExpense;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -759,10 +759,10 @@ function ExpenseSheet({
         amount: "",
         date: new Date().toISOString().slice(0, 10),
         splitKind: "equal" as const,
-        included: new Set(trip.members.map(m => m.id)),
+        included: new Set(tracker.members.map(m => m.id)),
         shares: {} as Record<string, string>,
         paymentKind: "single" as const,
-        singlePayer: trip.members[0]?.id ?? "",
+        singlePayer: tracker.members[0]?.id ?? "",
         paid: {} as Record<string, string>,
       };
     }
@@ -783,7 +783,7 @@ function ExpenseSheet({
       singlePayer: existing.payer_id,
       paid: paidRec,
     };
-  }, [existing, trip.members]);
+  }, [existing, tracker.members]);
 
   const [description, setDescription] = useState(initial.description);
   const [amount, setAmount]           = useState(initial.amount);
@@ -827,10 +827,10 @@ function ExpenseSheet({
     setSaving(true);
     try {
       // ── Splits side ───────────────────────────────────────────────────
-      let splits: TripExpenseSplit[] | undefined;
+      let splits: TrackerExpenseSplit[] | undefined;
       let splitKindToSend: "equal" | "custom" = "equal";
       if (splitKind === "equal") {
-        if (included.size === trip.members.length) {
+        if (included.size === tracker.members.length) {
           splitKindToSend = "equal";
           splits = undefined;
         } else {
@@ -842,7 +842,7 @@ function ExpenseSheet({
         }
       } else {
         splitKindToSend = "custom";
-        splits = trip.members
+        splits = tracker.members
           .filter(m => included.has(m.id))
           .map(m => ({ member_id: m.id, share: Number(shares[m.id] || 0) }));
       }
@@ -873,9 +873,9 @@ function ExpenseSheet({
         payments,
       };
       if (existing) {
-        await api.updateTripExpense(trip.id, existing.id, payload);
+        await api.updateTrackerExpense(tracker.id, existing.id, payload);
       } else {
-        await api.addTripExpense(trip.id, payload);
+        await api.addTrackerExpense(tracker.id, payload);
       }
       await onSaved();
     } catch (e) {
@@ -912,11 +912,11 @@ function ExpenseSheet({
           </div>
           {paymentKind === "single" ? (
             <select className={inputCls} value={singlePayer} onChange={e => setSinglePayer(e.target.value)}>
-              {trip.members.map(m => (<option key={m.id} value={m.id}>{m.display_name}</option>))}
+              {tracker.members.map(m => (<option key={m.id} value={m.id}>{m.display_name}</option>))}
             </select>
           ) : (
             <div className="flex flex-col gap-1">
-              {trip.members.map(m => {
+              {tracker.members.map(m => {
                 const checked = !!paid[m.id];
                 return (
                   <label key={m.id} className="flex items-center gap-3 py-1.5 px-2 -mx-2 rounded hover:bg-zinc-800/30">
@@ -966,7 +966,7 @@ function ExpenseSheet({
                     title="Type each person's exact share — total must add up to the amount">Custom</SegBtn>
           </div>
           <div className="flex flex-col gap-1">
-            {trip.members.map(m => (
+            {tracker.members.map(m => (
               <label key={m.id} className="flex items-center gap-3 py-1.5 px-2 -mx-2 rounded hover:bg-zinc-800/30">
                 <input
                   type="checkbox"
@@ -1018,16 +1018,16 @@ function ExpenseSheet({
 /* ────────────────────────── INVITE ────────────────────────── */
 
 function InviteSheet({
-  trip, onClose, onInvited,
+  tracker, onClose, onInvited,
 }: {
-  trip: TripDetail;
+  tracker: TrackerDetail;
   onClose: () => void;
   onInvited: () => Promise<void>;
 }) {
   const [email, setEmail]   = useState("");
   const [name,  setName]    = useState("");
   const [busy,  setBusy]    = useState(false);
-  const [last,  setLast]    = useState<TripMember | null>(null);
+  const [last,  setLast]    = useState<TrackerMember | null>(null);
   const [resending, setResending] = useState<string | null>(null);
   const [resentAt,  setResentAt]  = useState<Record<string, number>>({});
 
@@ -1035,7 +1035,7 @@ function InviteSheet({
     if (!email.includes("@") || !name.trim()) return;
     setBusy(true);
     try {
-      const m = await api.inviteTripMember(trip.id, { email: email.trim(), display_name: name.trim() });
+      const m = await api.inviteTrackerMember(tracker.id, { email: email.trim(), display_name: name.trim() });
       setLast(m);
       setEmail(""); setName("");
       await onInvited();
@@ -1046,7 +1046,7 @@ function InviteSheet({
   async function resend(memberId: string) {
     setResending(memberId);
     try {
-      await api.resendTripInvite(trip.id, memberId);
+      await api.resendTrackerInvite(tracker.id, memberId);
       setResentAt(s => ({ ...s, [memberId]: Date.now() }));
       await onInvited();
     } catch (e) { alert((e as Error).message); }
@@ -1054,14 +1054,14 @@ function InviteSheet({
   }
 
   function copyLink(token: string) {
-    const url = `${window.location.origin}/trips/guest/${token}`;
+    const url = `${window.location.origin}/trackers/guest/${token}`;
     navigator.clipboard.writeText(url).catch(() => {});
   }
 
   return (
     <Sheet onClose={onClose} title="Invite member">
       <p className="text-xs text-zinc-500">
-        We'll email a sign-in-free link to join the trip. They can also use the link directly — no SubTracker account needed.
+        We'll email a sign-in-free link to join the tracker. They can also use the link directly — no SubTracker account needed.
       </p>
       <FieldGrid>
         <Field label="Display name"><input autoFocus className={inputCls} placeholder="Aman" value={name} onChange={e => setName(e.target.value)} /></Field>
@@ -1086,10 +1086,10 @@ function InviteSheet({
       )}
 
       {/* Pending invites with resend + copy-link (in case email didn't arrive) */}
-      {trip.members.filter(m => m.invite_status === "pending" && m.invite_token).length > 0 && (
+      {tracker.members.filter(m => m.invite_status === "pending" && m.invite_token).length > 0 && (
         <div className="mt-3">
           <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">Pending invites</p>
-          {trip.members.filter(m => m.invite_status === "pending" && m.invite_token).map(m => {
+          {tracker.members.filter(m => m.invite_status === "pending" && m.invite_token).map(m => {
             const justResent = resentAt[m.id] && Date.now() - resentAt[m.id] < 4000;
             return (
               <div key={m.id} className="flex items-center gap-2 py-1.5 text-xs">
@@ -1124,10 +1124,10 @@ function InviteSheet({
 /* ────────────────────────── SETTLE ────────────────────────── */
 
 function SettleView({
-  trip, settlement, onClose,
+  tracker, settlement, onClose,
 }: {
-  trip: TripDetail;
-  settlement: TripSettlement;
+  tracker: TrackerDetail;
+  settlement: TrackerSettlement;
   onClose: () => void;
 }) {
   const transfers = settlement.transfers;
@@ -1137,7 +1137,7 @@ function SettleView({
         <Check size={28} className="mx-auto text-emerald-400" />
         <h2 className="text-lg font-semibold text-zinc-100 mt-3">Already settled ✓</h2>
         <p className="text-sm text-zinc-500 mt-1">Everyone's even. No transfers needed.</p>
-        {trip.status !== "settled" && (
+        {tracker.status !== "settled" && (
           <button onClick={onClose} className="mt-5 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium">
             Mark as settled
           </button>
@@ -1164,9 +1164,9 @@ function SettleView({
   );
 }
 
-function TransferRow({ transfer }: { transfer: TripTransfer }) {
+function TransferRow({ transfer }: { transfer: TrackerTransfer }) {
   const upi = transfer.to_upi_id
-    ? `upi://pay?pa=${encodeURIComponent(transfer.to_upi_id)}&pn=${encodeURIComponent(transfer.to_display_name)}&am=${transfer.amount.toFixed(2)}&cu=INR&tn=${encodeURIComponent("Trip settlement")}`
+    ? `upi://pay?pa=${encodeURIComponent(transfer.to_upi_id)}&pn=${encodeURIComponent(transfer.to_display_name)}&am=${transfer.amount.toFixed(2)}&cu=INR&tn=${encodeURIComponent("Tracker settlement")}`
     : null;
   return (
     <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-800/60 last:border-0">
@@ -1196,16 +1196,16 @@ interface MemberStat {
   share: number;       // total they're billed for (their splits)
   net: number;         // paid − share (positive = owed money back)
   expenses_count: number;
-  share_pct: number;   // their share of total trip cost (0..1)
+  share_pct: number;   // their share of total tracker cost (0..1)
 }
 
-function buildMemberStats(trip: TripDetail): MemberStat[] {
-  const totalCost = trip.expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
-  return trip.members.map(m => {
+function buildMemberStats(tracker: TrackerDetail): MemberStat[] {
+  const totalCost = tracker.expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+  return tracker.members.map(m => {
     let paid = 0;
     let share = 0;
     let count = 0;
-    for (const e of trip.expenses) {
+    for (const e of tracker.expenses) {
       // Paid: prefer per-expense payments, else fall back to the single payer.
       if (e.payments?.length) {
         const myPay = e.payments.find(p => p.member_id === m.id);
@@ -1232,14 +1232,14 @@ function buildMemberStats(trip: TripDetail): MemberStat[] {
   });
 }
 
-function StatsPanel({ trip, stats, transfers }: {
-  trip: TripDetail;
+function StatsPanel({ tracker, stats, transfers }: {
+  tracker: TrackerDetail;
   stats: MemberStat[];
   transfers: { from: string; to: string; amount: number }[];
 }) {
   const sortedBySpend = [...stats].sort((a, b) => b.paid - a.paid);
   const maxPaid = Math.max(1, ...stats.map(s => s.paid));
-  const nameOf = (id: string) => trip.members.find(m => m.id === id)?.display_name ?? "?";
+  const nameOf = (id: string) => tracker.members.find(m => m.id === id)?.display_name ?? "?";
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -1317,20 +1317,20 @@ function StatsPanel({ trip, stats, transfers }: {
   );
 }
 
-/* ────────────────────────── TRIP INFO ────────────────────────── */
+/* ────────────────────────── TRACKER INFO ────────────────────────── */
 
-function TripInfoSheet({
-  trip, onClose, onSaved, onDeleted,
+function TrackerInfoSheet({
+  tracker, onClose, onSaved, onDeleted,
 }: {
-  trip: TripDetail;
+  tracker: TrackerDetail;
   onClose: () => void;
   onSaved: () => Promise<void>;
   onDeleted: () => void;
 }) {
-  const [name, setName]     = useState(trip.name);
-  const [start, setStart]   = useState(trip.start_date ?? "");
-  const [end, setEnd]       = useState(trip.end_date ?? "");
-  const [note, setNote]     = useState(trip.note ?? "");
+  const [name, setName]     = useState(tracker.name);
+  const [start, setStart]   = useState(tracker.start_date ?? "");
+  const [end, setEnd]       = useState(tracker.end_date ?? "");
+  const [note, setNote]     = useState(tracker.note ?? "");
   const [busy, setBusy]     = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -1339,7 +1339,7 @@ function TripInfoSheet({
     if (!name.trim() || busy) return;
     setBusy(true);
     try {
-      await api.updateTrip(trip.id, {
+      await api.updateTracker(tracker.id, {
         name: name.trim(),
         start_date: start || undefined,
         end_date: end || undefined,
@@ -1352,19 +1352,19 @@ function TripInfoSheet({
 
   async function destroy() {
     // Two-step confirm: typing the name avoids accidental deletion of a
-    // trip with real money behind it. Backend cascades all child rows.
+    // tracker with real money behind it. Backend cascades all child rows.
     const typed = window.prompt(
-      `This permanently deletes "${trip.name}" — all expenses, splits, and balances. Type the name to confirm:`,
+      `This permanently deletes "${tracker.name}" — all expenses, splits, and balances. Type the name to confirm:`,
       "",
     );
     if (typed == null) return;
-    if (typed.trim() !== trip.name.trim()) {
+    if (typed.trim() !== tracker.name.trim()) {
       alert("Name didn't match. Nothing deleted.");
       return;
     }
     setDeleting(true);
     try {
-      await api.deleteTrip(trip.id);
+      await api.deleteTracker(tracker.id);
       onDeleted();
     } catch (e) { alert((e as Error).message); }
     finally { setDeleting(false); }
@@ -1424,8 +1424,8 @@ function TripInfoSheet({
 
 /* ────────────────────────── helpers ────────────────────────── */
 
-function groupByDate(expenses: TripExpense[]): { date: string; total: number; items: TripExpense[] }[] {
-  const groups: Record<string, TripExpense[]> = {};
+function groupByDate(expenses: TrackerExpense[]): { date: string; total: number; items: TrackerExpense[] }[] {
+  const groups: Record<string, TrackerExpense[]> = {};
   for (const e of expenses) {
     (groups[e.expense_date] ??= []).push(e);
   }
@@ -1451,7 +1451,7 @@ function formatDayHeader(iso: string): string {
 
 /** Greedy debt simplification — same algo as backend's compute_settlement,
  *  used here so the Stats panel can show pending transfers without an
- *  extra round-trip. */
+ *  extra round-tracker. */
 function greedyDebt(balances: { member_id: string; net: number }[]): { from: string; to: string; amount: number }[] {
   const cred = balances.filter(b => b.net > 0.005).map(b => ({ ...b })).sort((a, b) => b.net - a.net);
   const debt = balances.filter(b => b.net < -0.005).map(b => ({ ...b, net: -b.net })).sort((a, b) => b.net - a.net);
@@ -1468,16 +1468,16 @@ function greedyDebt(balances: { member_id: string; net: number }[]): { from: str
   return out;
 }
 
-/** Trigger a CSV download of the trip's expenses + per-member breakdown. */
-function exportTripCsv(trip: TripDetail): void {
-  const nameOf = (id: string) => trip.members.find(m => m.id === id)?.display_name ?? "?";
+/** Trigger a CSV download of the tracker's expenses + per-member breakdown. */
+function exportTrackerCsv(tracker: TrackerDetail): void {
+  const nameOf = (id: string) => tracker.members.find(m => m.id === id)?.display_name ?? "?";
   const esc = (v: unknown) => {
     const s = v == null ? "" : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const rows: string[] = [];
   rows.push(["Date", "Description", "Amount", "Paid by", "Split between", "Note"].join(","));
-  for (const e of trip.expenses) {
+  for (const e of tracker.expenses) {
     const paidBy = (e.payments?.length ? e.payments : [{ member_id: e.payer_id, amount: e.amount }])
       .map(p => `${nameOf(p.member_id)}:${Number(p.amount).toFixed(2)}`)
       .join(" + ");
@@ -1486,14 +1486,14 @@ function exportTripCsv(trip: TripDetail): void {
   }
   rows.push("");
   rows.push(["Member", "Paid", "Share", "Net"].join(","));
-  for (const s of buildMemberStats(trip)) {
+  for (const s of buildMemberStats(tracker)) {
     rows.push([s.display_name, s.paid.toFixed(2), s.share.toFixed(2), s.net.toFixed(2)].map(esc).join(","));
   }
   const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${trip.name.replace(/[^a-z0-9]+/gi, "_")}_expenses.csv`;
+  a.download = `${tracker.name.replace(/[^a-z0-9]+/gi, "_")}_expenses.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();

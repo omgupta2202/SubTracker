@@ -1,12 +1,12 @@
 """
 Expense Tracker — shared ledger for groups with email invites.
 
-Was originally "Trips"; rebranded to "Expense Tracker" because the same
-machinery handles trips, daily ongoing expenses with roommates, recurring
+Was originally "Trackers"; rebranded to "Expense Tracker" because the same
+machinery handles trackers, daily ongoing expenses with roommates, recurring
 dinner clubs, etc. — anything with a fixed set of members splitting costs.
-DB schema retains `trip_*` table names for stability.
+DB schema retains `tracker_*` table names for stability.
 
-Key abstraction: a tracker's expenses live entirely in `trip_*` tables,
+Key abstraction: a tracker's expenses live entirely in `tracker_*` tables,
 NOT in the user's personal ledger. This keeps tracker activity from
 polluting the dashboard's monthly burn while still letting the user record
 real payments separately if they want.
@@ -31,13 +31,13 @@ from db import fetchall, fetchone, execute, execute_void
 log = logging.getLogger(__name__)
 
 
-# ── Trip CRUD ────────────────────────────────────────────────────────────────
+# ── Tracker CRUD ────────────────────────────────────────────────────────────────
 
-def create_trip(creator_id: str, name: str, *, start_date=None, end_date=None,
+def create_tracker(creator_id: str, name: str, *, start_date=None, end_date=None,
                 currency: str = "INR", note: Optional[str] = None) -> dict:
-    trip = execute(
+    tracker = execute(
         """
-        INSERT INTO trips (creator_id, name, start_date, end_date, currency, note)
+        INSERT INTO trackers (creator_id, name, start_date, end_date, currency, note)
         VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING *
         """,
@@ -46,14 +46,14 @@ def create_trip(creator_id: str, name: str, *, start_date=None, end_date=None,
     # Creator becomes the first member (always 'creator' status).
     creator = fetchone("SELECT email, name FROM users WHERE id=%s", (creator_id,))
     add_member(
-        trip["id"], creator["email"], creator.get("name") or creator["email"].split("@")[0],
+        tracker["id"], creator["email"], creator.get("name") or creator["email"].split("@")[0],
         invite_status="creator", user_id=creator_id, invite_token=None,
     )
-    return get_trip(trip["id"], creator_id)
+    return get_tracker(tracker["id"], creator_id)
 
 
-def list_trips_for_user(user_id: str) -> List[dict]:
-    """Return trips where the user is creator OR a joined member, enriched
+def list_trackers_for_user(user_id: str) -> List[dict]:
+    """Return trackers where the user is creator OR a joined member, enriched
     with at-a-glance summary fields so the list view doesn't need a per-row
     detail fetch.
 
@@ -62,41 +62,41 @@ def list_trips_for_user(user_id: str) -> List[dict]:
     """
     rows = fetchall(
         """
-        WITH my_trips AS (
+        WITH my_trackers AS (
             SELECT DISTINCT t.id
-            FROM trips t
-            LEFT JOIN trip_members tm ON tm.trip_id = t.id
+            FROM trackers t
+            LEFT JOIN tracker_members tm ON tm.tracker_id = t.id
             WHERE t.creator_id = %(uid)s
                OR tm.user_id   = %(uid)s
         ),
         my_member AS (
-            SELECT trip_id, id AS member_id
-            FROM trip_members
+            SELECT tracker_id, id AS member_id
+            FROM tracker_members
             WHERE user_id = %(uid)s
               OR (invite_status='creator' AND user_id IS NULL
                   AND email = (SELECT email FROM users WHERE id=%(uid)s))
         ),
         sums AS (
-            SELECT trip_id,
+            SELECT tracker_id,
                    COUNT(*) AS expenses_count,
                    COALESCE(SUM(amount), 0) AS total_spent
-            FROM trip_expenses
-            WHERE trip_id IN (SELECT id FROM my_trips)
-            GROUP BY trip_id
+            FROM tracker_expenses
+            WHERE tracker_id IN (SELECT id FROM my_trackers)
+            GROUP BY tracker_id
         ),
         member_counts AS (
-            SELECT trip_id, COUNT(*) AS members_count
-            FROM trip_members
-            WHERE trip_id IN (SELECT id FROM my_trips)
-            GROUP BY trip_id
+            SELECT tracker_id, COUNT(*) AS members_count
+            FROM tracker_members
+            WHERE tracker_id IN (SELECT id FROM my_trackers)
+            GROUP BY tracker_id
         ),
         my_paid AS (
-            SELECT e.trip_id,
+            SELECT e.tracker_id,
                    COALESCE(SUM(
                      CASE
-                       WHEN EXISTS (SELECT 1 FROM trip_expense_payments p WHERE p.expense_id = e.id)
+                       WHEN EXISTS (SELECT 1 FROM tracker_expense_payments p WHERE p.expense_id = e.id)
                          THEN COALESCE((SELECT SUM(p.amount)
-                                          FROM trip_expense_payments p
+                                          FROM tracker_expense_payments p
                                           JOIN my_member mm ON mm.member_id = p.member_id
                                          WHERE p.expense_id = e.id), 0)
                        WHEN e.payer_id IN (SELECT member_id FROM my_member)
@@ -104,30 +104,30 @@ def list_trips_for_user(user_id: str) -> List[dict]:
                        ELSE 0
                      END
                    ), 0) AS paid
-            FROM trip_expenses e
-            WHERE e.trip_id IN (SELECT id FROM my_trips)
-            GROUP BY e.trip_id
+            FROM tracker_expenses e
+            WHERE e.tracker_id IN (SELECT id FROM my_trackers)
+            GROUP BY e.tracker_id
         ),
         my_share AS (
-            SELECT e.trip_id,
+            SELECT e.tracker_id,
                    COALESCE(SUM(s.share), 0) AS share
-            FROM trip_expenses e
-            JOIN trip_expense_splits s ON s.expense_id = e.id
+            FROM tracker_expenses e
+            JOIN tracker_expense_splits s ON s.expense_id = e.id
             JOIN my_member mm           ON mm.member_id = s.member_id
-            WHERE e.trip_id IN (SELECT id FROM my_trips)
-            GROUP BY e.trip_id
+            WHERE e.tracker_id IN (SELECT id FROM my_trackers)
+            GROUP BY e.tracker_id
         )
         SELECT t.*,
                COALESCE(s.expenses_count, 0)   AS expenses_count,
                COALESCE(s.total_spent, 0)      AS total_spent,
                COALESCE(mc.members_count, 0)   AS members_count,
                (COALESCE(mp.paid, 0) - COALESCE(ms.share, 0)) AS my_balance
-        FROM trips t
-        JOIN my_trips x      ON x.id = t.id
-        LEFT JOIN sums s          ON s.trip_id = t.id
-        LEFT JOIN member_counts mc ON mc.trip_id = t.id
-        LEFT JOIN my_paid mp      ON mp.trip_id = t.id
-        LEFT JOIN my_share ms     ON ms.trip_id = t.id
+        FROM trackers t
+        JOIN my_trackers x      ON x.id = t.id
+        LEFT JOIN sums s          ON s.tracker_id = t.id
+        LEFT JOIN member_counts mc ON mc.tracker_id = t.id
+        LEFT JOIN my_paid mp      ON mp.tracker_id = t.id
+        LEFT JOIN my_share ms     ON ms.tracker_id = t.id
         ORDER BY t.created_at DESC
         """,
         {"uid": user_id},
@@ -140,55 +140,55 @@ def list_trips_for_user(user_id: str) -> List[dict]:
     return rows
 
 
-def delete_trip(trip_id: str, user_id: str) -> bool:
-    """Hard-delete a trip and all child rows. Creator only.
+def delete_tracker(tracker_id: str, user_id: str) -> bool:
+    """Hard-delete a tracker and all child rows. Creator only.
 
     Cascade is handled by ON DELETE CASCADE on the FKs from
-    trip_members / trip_expenses / trip_expense_splits / trip_expense_payments
-    back to trips/expenses. If a constraint blocks (older schema), bail and
+    tracker_members / tracker_expenses / tracker_expense_splits / tracker_expense_payments
+    back to trackers/expenses. If a constraint blocks (older schema), bail and
     let the route surface the DB error.
     """
-    if not _is_creator(trip_id, user_id):
+    if not _is_creator(tracker_id, user_id):
         return False
-    execute_void("DELETE FROM trip_expense_payments WHERE expense_id IN (SELECT id FROM trip_expenses WHERE trip_id=%s)", (trip_id,))
-    execute_void("DELETE FROM trip_expense_splits   WHERE expense_id IN (SELECT id FROM trip_expenses WHERE trip_id=%s)", (trip_id,))
-    execute_void("DELETE FROM trip_expenses WHERE trip_id=%s", (trip_id,))
-    execute_void("DELETE FROM trip_members  WHERE trip_id=%s", (trip_id,))
-    execute_void("DELETE FROM trips         WHERE id=%s",      (trip_id,))
+    execute_void("DELETE FROM tracker_expense_payments WHERE expense_id IN (SELECT id FROM tracker_expenses WHERE tracker_id=%s)", (tracker_id,))
+    execute_void("DELETE FROM tracker_expense_splits   WHERE expense_id IN (SELECT id FROM tracker_expenses WHERE tracker_id=%s)", (tracker_id,))
+    execute_void("DELETE FROM tracker_expenses WHERE tracker_id=%s", (tracker_id,))
+    execute_void("DELETE FROM tracker_members  WHERE tracker_id=%s", (tracker_id,))
+    execute_void("DELETE FROM trackers         WHERE id=%s",      (tracker_id,))
     return True
 
 
-def get_trip(trip_id: str, user_id: Optional[str]) -> Optional[dict]:
-    """Full trip detail with members + expenses + computed balances."""
-    trip = fetchone("SELECT * FROM trips WHERE id=%s", (trip_id,))
-    if not trip:
+def get_tracker(tracker_id: str, user_id: Optional[str]) -> Optional[dict]:
+    """Full tracker detail with members + expenses + computed balances."""
+    tracker = fetchone("SELECT * FROM trackers WHERE id=%s", (tracker_id,))
+    if not tracker:
         return None
-    if user_id and not _user_can_view(trip, user_id):
+    if user_id and not _user_can_view(tracker, user_id):
         return None
 
     members = fetchall(
         """
         SELECT id, email, display_name, invite_status, user_id,
                invite_token, upi_id, invited_at, joined_at
-        FROM trip_members
-        WHERE trip_id = %s
+        FROM tracker_members
+        WHERE tracker_id = %s
         ORDER BY invited_at
         """,
-        (trip_id,),
+        (tracker_id,),
     )
 
     expenses = fetchall(
         """
         SELECT e.*,
                (SELECT json_agg(json_build_object('member_id', s.member_id, 'share', s.share))
-                  FROM trip_expense_splits s WHERE s.expense_id = e.id) AS splits,
+                  FROM tracker_expense_splits s WHERE s.expense_id = e.id) AS splits,
                (SELECT json_agg(json_build_object('member_id', p.member_id, 'amount', p.amount))
-                  FROM trip_expense_payments p WHERE p.expense_id = e.id) AS payments
-        FROM trip_expenses e
-        WHERE e.trip_id = %s
+                  FROM tracker_expense_payments p WHERE p.expense_id = e.id) AS payments
+        FROM tracker_expenses e
+        WHERE e.tracker_id = %s
         ORDER BY e.expense_date DESC, e.created_at DESC
         """,
-        (trip_id,),
+        (tracker_id,),
     )
     for e in expenses:
         if isinstance(e.get("splits"), str):
@@ -198,39 +198,104 @@ def get_trip(trip_id: str, user_id: Optional[str]) -> Optional[dict]:
             e["payments"] = json.loads(e["payments"])
         e["payments"] = e.get("payments") or []
 
+    categories = list_categories(tracker_id)
     balances = compute_balances(members, expenses)
     return {
-        **trip,
-        "members":  members,
-        "expenses": expenses,
-        "balances": balances,
+        **tracker,
+        "members":    members,
+        "expenses":   expenses,
+        "balances":   balances,
+        "categories": categories,
     }
 
 
-def update_trip(trip_id: str, user_id: str, fields: Dict[str, Any]) -> Optional[dict]:
-    if not _is_creator(trip_id, user_id):
+# ── Categories ──────────────────────────────────────────────────────────────
+
+VALID_COLORS = {"violet", "fuchsia", "emerald", "amber", "sky", "rose", "lime", "orange", "zinc"}
+
+
+def list_categories(tracker_id: str) -> List[dict]:
+    return fetchall(
+        """
+        SELECT id, tracker_id, name, color, position, created_at
+        FROM tracker_categories
+        WHERE tracker_id=%s
+        ORDER BY position, created_at
+        """,
+        (tracker_id,),
+    )
+
+
+def create_category(tracker_id: str, name: str, color: str = "violet") -> dict:
+    """Insert a category. Returns existing row on conflict so callers can use
+    this both as create and as get-or-create."""
+    color = color if color in VALID_COLORS else "violet"
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Category name cannot be empty")
+    # Pick the next position so new categories appear at the end of the list.
+    pos_row = fetchone("SELECT COALESCE(MAX(position), -1) + 1 AS pos FROM tracker_categories WHERE tracker_id=%s", (tracker_id,))
+    pos = (pos_row or {}).get("pos") or 0
+    row = execute(
+        """
+        INSERT INTO tracker_categories (tracker_id, name, color, position)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (tracker_id, name) DO NOTHING
+        RETURNING id, tracker_id, name, color, position, created_at
+        """,
+        (tracker_id, name, color, pos),
+    )
+    return row or fetchone(
+        "SELECT id, tracker_id, name, color, position, created_at FROM tracker_categories WHERE tracker_id=%s AND name=%s",
+        (tracker_id, name),
+    )
+
+
+def update_category(category_id: str, fields: Dict[str, Any]) -> Optional[dict]:
+    allowed = {"name", "color", "position"}
+    fs = {k: v for k, v in fields.items() if k in allowed}
+    if "color" in fs and fs["color"] not in VALID_COLORS:
+        fs["color"] = "violet"
+    if not fs:
+        return fetchone("SELECT * FROM tracker_categories WHERE id=%s", (category_id,))
+    set_clause = ", ".join(f"{k}=%s" for k in fs)
+    return execute(
+        f"UPDATE tracker_categories SET {set_clause} WHERE id=%s RETURNING *",
+        list(fs.values()) + [category_id],
+    )
+
+
+def delete_category(category_id: str) -> bool:
+    """Hard-delete the category. Expenses tagged with it have their
+    `category_id` set to NULL by the FK ON DELETE SET NULL."""
+    execute_void("DELETE FROM tracker_categories WHERE id=%s", (category_id,))
+    return True
+
+
+def update_tracker(tracker_id: str, user_id: str, fields: Dict[str, Any]) -> Optional[dict]:
+    if not _is_creator(tracker_id, user_id):
         return None
     allowed = {"name", "start_date", "end_date", "note", "status"}
     fields = {k: v for k, v in fields.items() if k in allowed}
     if not fields:
-        return get_trip(trip_id, user_id)
+        return get_tracker(tracker_id, user_id)
     set_clause = ", ".join(f"{k}=%s" for k in fields)
     execute_void(
-        f"UPDATE trips SET {set_clause}, updated_at=NOW() WHERE id=%s",
-        list(fields.values()) + [trip_id],
+        f"UPDATE trackers SET {set_clause}, updated_at=NOW() WHERE id=%s",
+        list(fields.values()) + [tracker_id],
     )
-    return get_trip(trip_id, user_id)
+    return get_tracker(tracker_id, user_id)
 
 
 # ── Member management ────────────────────────────────────────────────────────
 
-def add_member(trip_id: str, email: str, display_name: str,
+def add_member(tracker_id: str, email: str, display_name: str,
                *, invite_status: str = "pending",
                user_id: Optional[str] = None,
                invite_token: Optional[str] = "__generate__") -> dict:
     """
-    Add a member to a trip. Generates a unique `invite_token` UUID for guests
-    so they can authenticate via /trips/guest/<token>. The token is also
+    Add a member to a tracker. Generates a unique `invite_token` UUID for guests
+    so they can authenticate via /trackers/guest/<token>. The token is also
     suitable for the magic-link email — we use the same UUID for both the
     URL slug and the auth credential.
     """
@@ -239,29 +304,29 @@ def add_member(trip_id: str, email: str, display_name: str,
 
     row = execute(
         """
-        INSERT INTO trip_members (trip_id, email, display_name, invite_status, user_id, invite_token)
+        INSERT INTO tracker_members (tracker_id, email, display_name, invite_status, user_id, invite_token)
         VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (trip_id, email) DO NOTHING
+        ON CONFLICT (tracker_id, email) DO NOTHING
         RETURNING *
         """,
-        (trip_id, email.lower(), display_name, invite_status, user_id, invite_token),
+        (tracker_id, email.lower(), display_name, invite_status, user_id, invite_token),
     )
     return row or fetchone(
-        "SELECT * FROM trip_members WHERE trip_id=%s AND email=%s",
-        (trip_id, email.lower()),
+        "SELECT * FROM tracker_members WHERE tracker_id=%s AND email=%s",
+        (tracker_id, email.lower()),
     )
 
 
-def remove_member(trip_id: str, member_id: str, requester_id: str) -> bool:
-    if not _is_creator(trip_id, requester_id):
+def remove_member(tracker_id: str, member_id: str, requester_id: str) -> bool:
+    if not _is_creator(tracker_id, requester_id):
         return False
-    # Refuse to delete a member who has expenses on the trip — trip math
+    # Refuse to delete a member who has expenses on the tracker — tracker math
     # would break. Caller can handle this case explicitly.
     has_expenses = fetchone(
         """
-        SELECT 1 FROM trip_expenses WHERE payer_id=%s
+        SELECT 1 FROM tracker_expenses WHERE payer_id=%s
         UNION
-        SELECT 1 FROM trip_expense_splits WHERE member_id=%s
+        SELECT 1 FROM tracker_expense_splits WHERE member_id=%s
         LIMIT 1
         """,
         (member_id, member_id),
@@ -269,8 +334,8 @@ def remove_member(trip_id: str, member_id: str, requester_id: str) -> bool:
     if has_expenses:
         return False
     execute_void(
-        "DELETE FROM trip_members WHERE id=%s AND trip_id=%s AND invite_status<>'creator'",
-        (member_id, trip_id),
+        "DELETE FROM tracker_members WHERE id=%s AND tracker_id=%s AND invite_status<>'creator'",
+        (member_id, tracker_id),
     )
     return True
 
@@ -278,14 +343,14 @@ def remove_member(trip_id: str, member_id: str, requester_id: str) -> bool:
 def join_via_token(invite_token: str, claiming_user_id: Optional[str] = None) -> Optional[dict]:
     """Mark a member as joined. If a SubTracker user_id is provided, link them."""
     row = fetchone(
-        "SELECT * FROM trip_members WHERE invite_token=%s",
+        "SELECT * FROM tracker_members WHERE invite_token=%s",
         (invite_token,),
     )
     if not row:
         return None
     execute_void(
         """
-        UPDATE trip_members
+        UPDATE tracker_members
         SET invite_status='joined',
             joined_at=COALESCE(joined_at, NOW()),
             user_id=COALESCE(user_id, %s)
@@ -293,23 +358,23 @@ def join_via_token(invite_token: str, claiming_user_id: Optional[str] = None) ->
         """,
         (claiming_user_id, row["id"]),
     )
-    return fetchone("SELECT * FROM trip_members WHERE id=%s", (row["id"],))
+    return fetchone("SELECT * FROM tracker_members WHERE id=%s", (row["id"],))
 
 
 def member_for_token(invite_token: str) -> Optional[dict]:
     return fetchone(
-        "SELECT * FROM trip_members WHERE invite_token=%s",
+        "SELECT * FROM tracker_members WHERE invite_token=%s",
         (invite_token,),
     )
 
 
-def rotate_invite_token(trip_id: str, member_id: str) -> Optional[dict]:
+def rotate_invite_token(tracker_id: str, member_id: str) -> Optional[dict]:
     """Generate a fresh invite_token so the resend email contains a new link.
     Refuses if the member has already joined or is the creator (no email
     invite to resend), or if the member has no email on file."""
     member = fetchone(
-        "SELECT * FROM trip_members WHERE id=%s AND trip_id=%s",
-        (member_id, trip_id),
+        "SELECT * FROM tracker_members WHERE id=%s AND tracker_id=%s",
+        (member_id, tracker_id),
     )
     if not member or not member.get("email"):
         return None
@@ -318,7 +383,7 @@ def rotate_invite_token(trip_id: str, member_id: str) -> Optional[dict]:
     new_token = str(uuid4())
     return execute(
         """
-        UPDATE trip_members
+        UPDATE tracker_members
         SET invite_token=%s, invited_at=NOW()
         WHERE id=%s
         RETURNING *
@@ -327,23 +392,23 @@ def rotate_invite_token(trip_id: str, member_id: str) -> Optional[dict]:
     )
 
 
-def member_for_user(trip_id: str, user_id: str) -> Optional[dict]:
+def member_for_user(tracker_id: str, user_id: str) -> Optional[dict]:
     return fetchone(
         """
-        SELECT * FROM trip_members
-        WHERE trip_id=%s
+        SELECT * FROM tracker_members
+        WHERE tracker_id=%s
           AND (user_id=%s OR (invite_status='creator' AND user_id IS NULL
                               AND email=(SELECT email FROM users WHERE id=%s)))
         LIMIT 1
         """,
-        (trip_id, user_id, user_id),
+        (tracker_id, user_id, user_id),
     )
 
 
 # ── Expenses ────────────────────────────────────────────────────────────────
 
 def add_expense(
-    trip_id: str,
+    tracker_id: str,
     *,
     payer_id: str,
     description: str,
@@ -353,6 +418,7 @@ def add_expense(
     splits: Optional[List[Dict[str, Any]]] = None,   # [{member_id, share}, ...] for custom
     payments: Optional[List[Dict[str, Any]]] = None, # [{member_id, amount}, ...] for multi-payer
     note: Optional[str] = None,
+    category_id: Optional[str] = None,
     created_by: Optional[str] = None,
 ) -> dict:
     expense_date = expense_date or date.today()
@@ -374,7 +440,7 @@ def add_expense(
             raise ValueError(f"payments total {total} doesn't match amount {amount}")
         # The largest contributor is recorded as the row's `payer_id` for
         # back-compat with the single-payer schema; full breakdown lives in
-        # trip_expense_payments.
+        # tracker_expense_payments.
         primary = max(norm_payments, key=lambda p: p["amount"])
         payer_id = primary["member_id"]
     else:
@@ -382,18 +448,18 @@ def add_expense(
 
     row = execute(
         """
-        INSERT INTO trip_expenses
-          (trip_id, payer_id, description, amount, expense_date, split_kind, note, created_by)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO tracker_expenses
+          (tracker_id, payer_id, description, amount, expense_date, split_kind, note, category_id, created_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING *
         """,
-        (trip_id, payer_id, description, amount, expense_date, split_kind, note, created_by or payer_id),
+        (tracker_id, payer_id, description, amount, expense_date, split_kind, note, category_id, created_by or payer_id),
     )
 
     # Materialize per-member payments.
     for p in norm_payments:
         execute_void(
-            "INSERT INTO trip_expense_payments (expense_id, member_id, amount) VALUES (%s, %s, %s)",
+            "INSERT INTO tracker_expense_payments (expense_id, member_id, amount) VALUES (%s, %s, %s)",
             (row["id"], p["member_id"], p["amount"]),
         )
 
@@ -407,17 +473,17 @@ def add_expense(
             raise ValueError(f"split total {total} doesn't match amount {amount}")
         for s in splits:
             execute_void(
-                "INSERT INTO trip_expense_splits (expense_id, member_id, share) VALUES (%s, %s, %s)",
+                "INSERT INTO tracker_expense_splits (expense_id, member_id, share) VALUES (%s, %s, %s)",
                 (row["id"], s["member_id"], Decimal(str(s["share"]))),
             )
     else:
         # Equal split across all current members.
         members = fetchall(
-            "SELECT id FROM trip_members WHERE trip_id=%s ORDER BY invited_at",
-            (trip_id,),
+            "SELECT id FROM tracker_members WHERE tracker_id=%s ORDER BY invited_at",
+            (tracker_id,),
         )
         if not members:
-            raise ValueError("trip has no members")
+            raise ValueError("tracker has no members")
         amt = Decimal(str(amount))
         per = (amt / len(members)).quantize(Decimal("0.01"))
         # Distribute the rounding remainder to the first members.
@@ -428,7 +494,7 @@ def add_expense(
             shares[0] = (shares[0] + diff).quantize(Decimal("0.01"))
         for m, s in zip(members, shares):
             execute_void(
-                "INSERT INTO trip_expense_splits (expense_id, member_id, share) VALUES (%s, %s, %s)",
+                "INSERT INTO tracker_expense_splits (expense_id, member_id, share) VALUES (%s, %s, %s)",
                 (row["id"], m["id"], s),
             )
 
@@ -443,7 +509,7 @@ def update_expense(expense_id: str, fields: Dict[str, Any]) -> Optional[dict]:
     single-payer queries stay coherent. When `splits` is provided, the
     splits table is rewritten wholesale.
     """
-    allowed = {"description", "amount", "expense_date", "note", "split_kind"}
+    allowed = {"description", "amount", "expense_date", "note", "split_kind", "category_id"}
     field_set = {k: v for k, v in fields.items() if k in allowed}
 
     payments = fields.get("payments")
@@ -458,7 +524,7 @@ def update_expense(expense_id: str, fields: Dict[str, Any]) -> Optional[dict]:
         # the row's stored amount.
         amt_target = Decimal(str(fields["amount"])) if "amount" in fields else None
         if amt_target is None:
-            existing = fetchone("SELECT amount FROM trip_expenses WHERE id=%s", (expense_id,))
+            existing = fetchone("SELECT amount FROM tracker_expenses WHERE id=%s", (expense_id,))
             amt_target = Decimal(str(existing["amount"])) if existing else None
         if amt_target is not None:
             total = sum((p["amount"] for p in norm), Decimal("0"))
@@ -470,32 +536,32 @@ def update_expense(expense_id: str, fields: Dict[str, Any]) -> Optional[dict]:
     if field_set:
         set_clause = ", ".join(f"{k}=%s" for k in field_set)
         execute_void(
-            f"UPDATE trip_expenses SET {set_clause}, updated_at=NOW() WHERE id=%s",
+            f"UPDATE tracker_expenses SET {set_clause}, updated_at=NOW() WHERE id=%s",
             list(field_set.values()) + [expense_id],
         )
 
     if payments is not None:
-        execute_void("DELETE FROM trip_expense_payments WHERE expense_id=%s", (expense_id,))
+        execute_void("DELETE FROM tracker_expense_payments WHERE expense_id=%s", (expense_id,))
         for p in [{"member_id": x["member_id"], "amount": x["amount"]} for x in
                   [{"member_id": p["member_id"], "amount": Decimal(str(p["amount"]))}
                    for p in payments if Decimal(str(p.get("amount") or 0)) > 0]]:
             execute_void(
-                "INSERT INTO trip_expense_payments (expense_id, member_id, amount) VALUES (%s, %s, %s)",
+                "INSERT INTO tracker_expense_payments (expense_id, member_id, amount) VALUES (%s, %s, %s)",
                 (expense_id, p["member_id"], p["amount"]),
             )
 
     if "splits" in fields and fields["splits"] is not None:
-        execute_void("DELETE FROM trip_expense_splits WHERE expense_id=%s", (expense_id,))
+        execute_void("DELETE FROM tracker_expense_splits WHERE expense_id=%s", (expense_id,))
         for s in fields["splits"]:
             execute_void(
-                "INSERT INTO trip_expense_splits (expense_id, member_id, share) VALUES (%s, %s, %s)",
+                "INSERT INTO tracker_expense_splits (expense_id, member_id, share) VALUES (%s, %s, %s)",
                 (expense_id, s["member_id"], Decimal(str(s["share"]))),
             )
-    return fetchone("SELECT * FROM trip_expenses WHERE id=%s", (expense_id,))
+    return fetchone("SELECT * FROM tracker_expenses WHERE id=%s", (expense_id,))
 
 
 def delete_expense(expense_id: str) -> bool:
-    execute_void("DELETE FROM trip_expenses WHERE id=%s", (expense_id,))
+    execute_void("DELETE FROM tracker_expenses WHERE id=%s", (expense_id,))
     return True
 
 
@@ -530,22 +596,22 @@ def compute_balances(members: List[dict], expenses: List[dict]) -> List[dict]:
     return out
 
 
-def compute_settlement(trip_id: str) -> dict:
+def compute_settlement(tracker_id: str) -> dict:
     """Return a minimal-transfers settlement plan."""
     members  = fetchall(
-        "SELECT id, display_name, upi_id FROM trip_members WHERE trip_id=%s",
-        (trip_id,),
+        "SELECT id, display_name, upi_id FROM tracker_members WHERE tracker_id=%s",
+        (tracker_id,),
     )
     expenses = fetchall(
         """
         SELECT e.id, e.amount, e.payer_id,
                (SELECT json_agg(json_build_object('member_id', s.member_id, 'share', s.share))
-                  FROM trip_expense_splits s WHERE s.expense_id = e.id) AS splits,
+                  FROM tracker_expense_splits s WHERE s.expense_id = e.id) AS splits,
                (SELECT json_agg(json_build_object('member_id', p.member_id, 'amount', p.amount))
-                  FROM trip_expense_payments p WHERE p.expense_id = e.id) AS payments
-        FROM trip_expenses e WHERE e.trip_id=%s
+                  FROM tracker_expense_payments p WHERE p.expense_id = e.id) AS payments
+        FROM tracker_expenses e WHERE e.tracker_id=%s
         """,
-        (trip_id,),
+        (tracker_id,),
     )
     for e in expenses:
         if isinstance(e.get("splits"), str):
@@ -595,16 +661,16 @@ def compute_settlement(trip_id: str) -> dict:
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-def _is_creator(trip_id: str, user_id: str) -> bool:
-    row = fetchone("SELECT 1 FROM trips WHERE id=%s AND creator_id=%s", (trip_id, user_id))
+def _is_creator(tracker_id: str, user_id: str) -> bool:
+    row = fetchone("SELECT 1 FROM trackers WHERE id=%s AND creator_id=%s", (tracker_id, user_id))
     return bool(row)
 
 
-def _user_can_view(trip: dict, user_id: str) -> bool:
-    if str(trip["creator_id"]) == str(user_id):
+def _user_can_view(tracker: dict, user_id: str) -> bool:
+    if str(tracker["creator_id"]) == str(user_id):
         return True
     row = fetchone(
-        "SELECT 1 FROM trip_members WHERE trip_id=%s AND user_id=%s",
-        (trip["id"], user_id),
+        "SELECT 1 FROM tracker_members WHERE tracker_id=%s AND user_id=%s",
+        (tracker["id"], user_id),
     )
     return bool(row)

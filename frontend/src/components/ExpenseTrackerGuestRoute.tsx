@@ -6,84 +6,84 @@ import {
 import { cn } from "@/lib/utils";
 import { inrCompact, inr, relativeTime, fullTimestamp } from "@/lib/tokens";
 import * as api from "@/services/api";
-import type { TripDetail, TripMember, TripExpense, TripExpenseSplit } from "@/services/api";
+import type { TrackerDetail, TrackerMember, TrackerExpense, TrackerExpenseSplit } from "@/services/api";
 
 /**
  * Guest entry point — opened by anyone holding the magic-link from an
- * invite email at `/trips/guest/<token>`. No SubTracker account needed.
+ * invite email at `/trackers/guest/<token>`. No SubTracker account needed.
  *
  * Behaviour:
- *   - GET /api/trips/guest/<token>   → returns trip + this guest's row.
+ *   - GET /api/trackers/guest/<token>   → returns tracker + this guest's row.
  *     Backend auto-promotes invite_status from 'pending' → 'joined'.
  *   - Guest can add expenses, set their UPI VPA, see balances + settlement.
  *   - The token is cached in localStorage so they can revisit by typing
- *     just /trips and we'll route back to the active trip.
+ *     just /trackers and we'll route back to the active tracker.
  */
 
-const STORAGE_KEY = "subtracker:guest-trip-token";
+const STORAGE_KEY = "subtracker:guest-tracker-token";
 
 export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
-  const [trip, setTrip]     = useState<(TripDetail & { me: TripMember }) | null>(null);
+  const [tracker, setTracker]     = useState<(TrackerDetail & { me: TrackerMember }) | null>(null);
   const [error, setError]   = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [sheet, setSheet]     = useState<TripExpense | "new" | null>(null);
+  const [sheet, setSheet]     = useState<TrackerExpense | "new" | null>(null);
   const [editingMe, setEditingMe] = useState(false);
   const [search, setSearch]   = useState("");
 
   async function refresh() {
     setLoading(true);
     try {
-      const t = await api.guestGetTrip(token);
-      setTrip(t);
+      const t = await api.guestGetTracker(token);
+      setTracker(t);
       localStorage.setItem(STORAGE_KEY, token);
     } catch (e) {
-      setError((e as Error).message || "Could not load trip");
+      setError((e as Error).message || "Could not load tracker");
     } finally { setLoading(false); }
   }
   useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, [token]);
 
   const myStats = useMemo(() => {
-    if (!trip) return null;
+    if (!tracker) return null;
     let paid = 0, share = 0;
-    for (const e of trip.expenses) {
+    for (const e of tracker.expenses) {
       if (e.payments?.length) {
-        const mine = e.payments.find(p => p.member_id === trip.me.id);
+        const mine = e.payments.find(p => p.member_id === tracker.me.id);
         if (mine) paid += Number(mine.amount);
-      } else if (e.payer_id === trip.me.id) {
+      } else if (e.payer_id === tracker.me.id) {
         paid += Number(e.amount);
       }
-      const s = e.splits.find(x => x.member_id === trip.me.id);
+      const s = e.splits.find(x => x.member_id === tracker.me.id);
       if (s) share += Number(s.share);
     }
     return { paid: +paid.toFixed(2), share: +share.toFixed(2) };
-  }, [trip]);
+  }, [tracker]);
 
-  if (loading && !trip) {
+  if (loading && !tracker) {
     return <Center><Loader2 size={20} className="text-violet-400 animate-spin" /></Center>;
   }
   if (error) {
     return (
       <Center>
         <div className="text-center max-w-sm">
-          <h1 className="text-lg font-semibold text-zinc-100">Couldn't open this trip</h1>
+          <h1 className="text-lg font-semibold text-zinc-100">Couldn't open this tracker</h1>
           <p className="text-sm text-zinc-500 mt-2">{error}</p>
         </div>
       </Center>
     );
   }
-  if (!trip) return null;
+  if (!tracker) return null;
 
-  const myBal = trip.balances.find(b => b.member_id === trip.me.id);
-  const totalSpent = trip.expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+  const myBal = tracker.balances.find(b => b.member_id === tracker.me.id);
+  const totalSpent = tracker.expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
 
   const q = search.trim().toLowerCase();
   const filteredExpenses = q
-    ? trip.expenses.filter(e =>
+    ? tracker.expenses.filter(e =>
         e.description.toLowerCase().includes(q)
         || (e.payments?.length ? e.payments.map(p => p.member_id) : [e.payer_id])
-            .some(id => trip.members.find(m => m.id === id)?.display_name?.toLowerCase().includes(q))
+            .some(id => tracker.members.find(m => m.id === id)?.display_name?.toLowerCase().includes(q))
       )
-    : trip.expenses;
+    : tracker.expenses;
 
   return (
     <div className="min-h-screen bg-zinc-950">
@@ -91,10 +91,10 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
         <div className="max-w-[760px] mx-auto px-5 py-3 flex items-center gap-3">
           <Users size={16} className="text-violet-400" />
           <div className="min-w-0 flex-1">
-            <h1 className="text-base font-semibold text-zinc-100 truncate">{trip.name}</h1>
+            <h1 className="text-base font-semibold text-zinc-100 truncate">{tracker.name}</h1>
             <p className="text-[11px] text-zinc-500 truncate">
-              You're <strong className="text-zinc-300">{trip.me.display_name}</strong>
-              {trip.me.upi_id && <span> · UPI <span className="num">{trip.me.upi_id}</span></span>}
+              You're <strong className="text-zinc-300">{tracker.me.display_name}</strong>
+              {tracker.me.upi_id && <span> · UPI <span className="num">{tracker.me.upi_id}</span></span>}
               <button onClick={() => setEditingMe(true)}
                       title="Update your display name or UPI ID (so others can pay you with one tap)"
                       className="ml-2 inline-flex items-center gap-1 text-violet-300 hover:text-violet-200">
@@ -106,9 +106,9 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
       </header>
 
       <div className="max-w-[760px] mx-auto px-5 py-6 pb-28 flex flex-col gap-5">
-        {/* Hero — your balance + trip total */}
+        {/* Hero — your balance + tracker total */}
         <div className="relative overflow-hidden rounded-3xl border border-zinc-800/60 bg-gradient-to-br from-violet-500/10 via-zinc-900 to-zinc-950 p-6"
-             title="Net amount across the whole trip: positive means people owe you; negative means you owe.">
+             title="Net amount across the whole tracker: positive means people owe you; negative means you owe.">
           <div aria-hidden className="pointer-events-none absolute -top-16 -right-16 w-44 h-44 rounded-full bg-violet-500/15 blur-3xl" />
           <div aria-hidden className="pointer-events-none absolute -bottom-16 -left-12 w-44 h-44 rounded-full bg-fuchsia-500/10 blur-3xl" />
           <div className="relative flex items-start justify-between gap-4 flex-wrap">
@@ -136,7 +136,7 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
               <div className="mt-3 text-[11px] text-zinc-500 flex flex-wrap gap-x-3 gap-y-1">
                 <span>paid <span className="num text-zinc-300">{inrCompact(myStats?.paid ?? 0)}</span></span>
                 <span>your share <span className="num text-zinc-300">{inrCompact(myStats?.share ?? 0)}</span></span>
-                <span>trip total <span className="num text-zinc-300">{inrCompact(totalSpent)}</span></span>
+                <span>tracker total <span className="num text-zinc-300">{inrCompact(totalSpent)}</span></span>
               </div>
             </div>
           </div>
@@ -146,7 +146,7 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
         <section>
           <SectionTitle>Who owes whom</SectionTitle>
           <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/60 mt-2 overflow-hidden">
-            {trip.balances.map(b => (
+            {tracker.balances.map(b => (
               <div key={b.member_id} className="flex items-center px-4 py-2.5 border-b border-zinc-800/40 last:border-0">
                 <span className="text-sm text-zinc-200 flex-1 truncate">{b.display_name}</span>
                 <span className={cn(
@@ -165,19 +165,19 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
         </section>
 
         {/* Stats — who spent how much */}
-        {trip.expenses.length > 0 && (
+        {tracker.expenses.length > 0 && (
           <section>
             <SectionTitle>Who spent how much</SectionTitle>
-            <GuestStatsGrid trip={trip} />
+            <GuestStatsGrid tracker={tracker} />
           </section>
         )}
 
         {/* Search + Expenses */}
         <section className="flex flex-col gap-2">
           <div className="flex items-baseline justify-between">
-            <SectionTitle>Expenses · {trip.expenses.length}</SectionTitle>
+            <SectionTitle>Expenses · {tracker.expenses.length}</SectionTitle>
           </div>
-          {trip.expenses.length > 0 && (
+          {tracker.expenses.length > 0 && (
             <div className="relative">
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
               <input
@@ -204,12 +204,12 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
               <GuestExpenseRow
                 key={e.id}
                 expense={e}
-                members={trip.members}
+                members={tracker.members}
                 onEdit={() => setSheet(e)}
                 onDelete={async () => {
                   if (!confirm("Delete this expense?")) return;
                   try {
-                    await api.guestDeleteTripExpense(token, e.id);
+                    await api.guestDeleteTrackerExpense(token, e.id);
                     await refresh();
                   } catch (err) { alert((err as Error).message); }
                 }}
@@ -219,7 +219,7 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
         </section>
 
         {/* Settlement */}
-        <SettleStrip trip={trip} />
+        <SettleStrip tracker={tracker} />
       </div>
 
       {/* Sticky FAB */}
@@ -237,7 +237,7 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
 
       {sheet && (
         <ExpenseSheetGuest
-          trip={trip}
+          tracker={tracker}
           token={token}
           existing={sheet === "new" ? undefined : sheet}
           onClose={() => setSheet(null)}
@@ -247,7 +247,7 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
       {editingMe && (
         <EditMeSheet
           token={token}
-          me={trip.me}
+          me={tracker.me}
           onClose={() => setEditingMe(false)}
           onSaved={async () => { setEditingMe(false); await refresh(); }}
         />
@@ -261,8 +261,8 @@ export function ExpenseTrackerGuestRoute({ token }: { token: string }) {
 function GuestExpenseRow({
   expense, members, onEdit, onDelete,
 }: {
-  expense: TripExpense;
-  members: TripMember[];
+  expense: TrackerExpense;
+  members: TrackerMember[];
   onEdit: () => void;
   onDelete: () => Promise<void>;
 }) {
@@ -336,12 +336,12 @@ function GuestExpenseRow({
 
 /* ── Lite stats grid for the guest view ── */
 
-function GuestStatsGrid({ trip }: { trip: TripDetail & { me: TripMember } }) {
+function GuestStatsGrid({ tracker }: { tracker: TrackerDetail & { me: TrackerMember } }) {
   const stats = useMemo(() => {
-    const totalCost = trip.expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
-    return trip.members.map(m => {
+    const totalCost = tracker.expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+    return tracker.members.map(m => {
       let paid = 0, share = 0;
-      for (const e of trip.expenses) {
+      for (const e of tracker.expenses) {
         if (e.payments?.length) {
           const mine = e.payments.find(p => p.member_id === m.id);
           if (mine) paid += Number(mine.amount);
@@ -360,7 +360,7 @@ function GuestStatsGrid({ trip }: { trip: TripDetail & { me: TripMember } }) {
         share_pct: totalCost > 0 ? paid / totalCost : 0,
       };
     }).sort((a, b) => b.paid - a.paid);
-  }, [trip]);
+  }, [tracker]);
   const maxPaid = Math.max(1, ...stats.map(s => s.paid));
 
   return (
@@ -401,26 +401,26 @@ function GuestStatsGrid({ trip }: { trip: TripDetail & { me: TripMember } }) {
 
 /* ── Settle strip — guest sees only transfers involving them, with a UPI button to send. ── */
 
-function SettleStrip({ trip }: { trip: TripDetail & { me: TripMember } }) {
+function SettleStrip({ tracker }: { tracker: TrackerDetail & { me: TrackerMember } }) {
   const [data, setData] = useState<{ transfers: { from_member_id: string; to_member_id: string; amount: number; from_display_name: string; to_display_name: string; to_upi_id: string | null }[] } | null>(null);
 
-  // Recompute whenever trip changes — guest doesn't have access to /settlement
+  // Recompute whenever tracker changes — guest doesn't have access to /settlement
   // (that's owner-side), so we compute locally from the balances.
   useEffect(() => {
-    const t = greedy(trip.balances.map(b => ({ id: b.member_id, name: b.display_name, net: b.net })));
-    const upi = new Map(trip.members.map(m => [m.id, m.upi_id]));
+    const t = greedy(tracker.balances.map(b => ({ id: b.member_id, name: b.display_name, net: b.net })));
+    const upi = new Map(tracker.members.map(m => [m.id, m.upi_id]));
     setData({
       transfers: t.map(x => ({
         ...x,
-        from_display_name: trip.balances.find(b => b.member_id === x.from_member_id)?.display_name ?? "?",
-        to_display_name:   trip.balances.find(b => b.member_id === x.to_member_id)?.display_name ?? "?",
+        from_display_name: tracker.balances.find(b => b.member_id === x.from_member_id)?.display_name ?? "?",
+        to_display_name:   tracker.balances.find(b => b.member_id === x.to_member_id)?.display_name ?? "?",
         to_upi_id:         upi.get(x.to_member_id) ?? null,
       })),
     });
-  }, [trip]);
+  }, [tracker]);
 
   if (!data || data.transfers.length === 0) return null;
-  const involvingMe = data.transfers.filter(t => t.from_member_id === trip.me.id || t.to_member_id === trip.me.id);
+  const involvingMe = data.transfers.filter(t => t.from_member_id === tracker.me.id || t.to_member_id === tracker.me.id);
   if (involvingMe.length === 0) return null;
 
   return (
@@ -428,9 +428,9 @@ function SettleStrip({ trip }: { trip: TripDetail & { me: TripMember } }) {
       <SectionTitle>Settle up</SectionTitle>
       <div className="rounded-2xl border border-violet-500/25 bg-violet-500/5 mt-2 p-3 flex flex-col gap-2">
         {involvingMe.map((t, i) => {
-          const youOwe = t.from_member_id === trip.me.id;
+          const youOwe = t.from_member_id === tracker.me.id;
           const upi = youOwe && t.to_upi_id
-            ? `upi://pay?pa=${encodeURIComponent(t.to_upi_id)}&pn=${encodeURIComponent(t.to_display_name)}&am=${t.amount.toFixed(2)}&cu=INR&tn=${encodeURIComponent("Trip settlement")}`
+            ? `upi://pay?pa=${encodeURIComponent(t.to_upi_id)}&pn=${encodeURIComponent(t.to_display_name)}&am=${t.amount.toFixed(2)}&cu=INR&tn=${encodeURIComponent("Tracker settlement")}`
             : null;
           return (
             <div key={i} className="flex items-center gap-2 px-2 py-2 rounded-lg bg-zinc-900/80 border border-zinc-800">
@@ -476,11 +476,11 @@ function greedy(rows: { id: string; name: string; net: number }[]) {
 /* ── Guest expense sheet — add + edit ── */
 
 function ExpenseSheetGuest({
-  trip, token, existing, onClose, onSaved,
+  tracker, token, existing, onClose, onSaved,
 }: {
-  trip: TripDetail & { me: TripMember };
+  tracker: TrackerDetail & { me: TrackerMember };
   token: string;
-  existing?: TripExpense;
+  existing?: TrackerExpense;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -490,9 +490,9 @@ function ExpenseSheetGuest({
         description: "",
         amount: "",
         date: new Date().toISOString().slice(0, 10),
-        included: new Set(trip.members.map(m => m.id)),
+        included: new Set(tracker.members.map(m => m.id)),
         paymentKind: "single" as const,
-        singlePayer: trip.me.id,
+        singlePayer: tracker.me.id,
         paid: {} as Record<string, string>,
       };
     }
@@ -509,7 +509,7 @@ function ExpenseSheetGuest({
       singlePayer: existing.payer_id,
       paid: paidRec,
     };
-  }, [existing, trip.members, trip.me.id]);
+  }, [existing, tracker.members, tracker.me.id]);
 
   const [description, setDescription] = useState(initial.description);
   const [amount, setAmount]           = useState(initial.amount);
@@ -538,9 +538,9 @@ function ExpenseSheetGuest({
     }
     setSaving(true);
     try {
-      let splits: TripExpenseSplit[] | undefined;
+      let splits: TrackerExpenseSplit[] | undefined;
       let kind: "equal" | "custom" = "equal";
-      if (included.size !== trip.members.length) {
+      if (included.size !== tracker.members.length) {
         kind = "custom";
         const ids = [...included];
         const per = +(amt / ids.length).toFixed(2);
@@ -572,9 +572,9 @@ function ExpenseSheetGuest({
         payments,
       };
       if (existing) {
-        await api.guestUpdateTripExpense(token, existing.id, payload);
+        await api.guestUpdateTrackerExpense(token, existing.id, payload);
       } else {
-        await api.guestAddTripExpense(token, payload);
+        await api.guestAddTrackerExpense(token, payload);
       }
       await onSaved();
     } catch (e) { alert((e as Error).message); }
@@ -609,11 +609,11 @@ function ExpenseSheetGuest({
           </div>
           {paymentKind === "single" ? (
             <select className={inputCls} value={singlePayer} onChange={e => setSinglePayer(e.target.value)}>
-              {trip.members.map(m => (<option key={m.id} value={m.id}>{m.display_name}</option>))}
+              {tracker.members.map(m => (<option key={m.id} value={m.id}>{m.display_name}</option>))}
             </select>
           ) : (
             <div className="flex flex-col gap-1">
-              {trip.members.map(m => {
+              {tracker.members.map(m => {
                 const checked = !!paid[m.id];
                 return (
                   <label key={m.id} className="flex items-center gap-3 py-1.5 px-2 -mx-2 rounded hover:bg-zinc-800/30">
@@ -657,7 +657,7 @@ function ExpenseSheetGuest({
 
         <Field label="Split equally between" hint="Uncheck anyone who shouldn't share this expense — the cost is divided equally between everyone left checked.">
           <div className="flex flex-col gap-1">
-            {trip.members.map(m => (
+            {tracker.members.map(m => (
               <label key={m.id} className="flex items-center gap-3 py-1.5 px-2 -mx-2 rounded hover:bg-zinc-800/30">
                 <input
                   type="checkbox" checked={included.has(m.id)}
@@ -704,7 +704,7 @@ function EditMeSheet({
   token, me, onClose, onSaved,
 }: {
   token: string;
-  me: TripMember;
+  me: TrackerMember;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {

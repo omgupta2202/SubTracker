@@ -5,7 +5,7 @@ Used for:
   - mark_paid     — pay a CC statement / obligation occurrence from the email
   - snooze        — silence a notification for N days
   - upi_redirect  — open a landing page that builds a UPI deep link
-  - trip_join     — (Plan 2) accept a trip invite without signing up
+  - tracker_join     — (Plan 2) accept a tracker invite without signing up
 
 Tokens are DB-backed UUIDs (not signed JWTs) so we can flip a row to
 `consumed_at = NOW()` and refuse to honor it again. UUIDs are 122-bit
@@ -31,7 +31,7 @@ DEFAULT_TTL_HOURS = {
     "mark_paid":    24 * 7,       # 1 week
     "snooze":       24 * 7,
     "upi_redirect": 24 * 14,      # 2 weeks (UPI link is read-only)
-    "trip_join":    24 * 30,      # 30 days
+    "tracker_join":    24 * 30,      # 30 days
 }
 
 
