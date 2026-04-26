@@ -321,14 +321,16 @@ def get_tracker(tracker_id: str, user_id: Optional[str]) -> Optional[dict]:
             e["payments"] = json.loads(e["payments"])
         e["payments"] = e.get("payments") or []
 
-    categories = list_categories(tracker_id)
-    balances = compute_balances(members, expenses)
+    categories  = list_categories(tracker_id)
+    settlements = list_settlements(tracker_id)
+    balances    = compute_balances(members, expenses, settlements=settlements)
     return {
         **tracker,
-        "members":    members,
-        "expenses":   expenses,
-        "balances":   balances,
-        "categories": categories,
+        "members":     members,
+        "expenses":    expenses,
+        "balances":    balances,
+        "categories":  categories,
+        "settlements": settlements,
     }
 
 
@@ -765,12 +767,23 @@ def delete_expense(expense_id: str) -> bool:
 
 # ── Settlement ──────────────────────────────────────────────────────────────
 
-def compute_balances(members: List[dict], expenses: List[dict]) -> List[dict]:
+def compute_balances(
+    members: List[dict],
+    expenses: List[dict],
+    settlements: Optional[List[dict]] = None,
+) -> List[dict]:
     """Per-member: paid (debit), owed (credit), net (paid − owed).
 
     Uses the per-expense `payments` list when present (multi-payer); falls
     back to a single virtual payment from (payer_id, amount) for legacy
     expenses created before the payments table existed.
+
+    `settlements` is the optional list of recorded off-ledger transfers
+    (rows from tracker_settlements). Each entry of the form
+    `{from_member_id, to_member_id, amount}` is folded into the math as:
+      from.paid  += amount   (the payer has put more in)
+      to.owed    += amount   (the recipient's net entitlement shrinks)
+    so a fully-settled trip has every member at net=0.
     """
     by_id = {m["id"]: {"member_id": m["id"], "display_name": m["display_name"],
                         "paid": Decimal("0"), "owed": Decimal("0"), "net": Decimal("0")}
@@ -785,6 +798,11 @@ def compute_balances(members: List[dict], expenses: List[dict]) -> List[dict]:
             mid = s["member_id"]
             if mid in by_id:
                 by_id[mid]["owed"] += Decimal(str(s["share"]))
+    for st in (settlements or []):
+        amt = Decimal(str(st["amount"]))
+        f, t = st["from_member_id"], st["to_member_id"]
+        if f in by_id: by_id[f]["paid"] += amt
+        if t in by_id: by_id[t]["owed"] += amt
     out = []
     for v in by_id.values():
         v["net"] = (v["paid"] - v["owed"]).quantize(Decimal("0.01"))
@@ -792,6 +810,93 @@ def compute_balances(members: List[dict], expenses: List[dict]) -> List[dict]:
         v["owed"] = v["owed"].quantize(Decimal("0.01"))
         out.append({k: (float(x) if isinstance(x, Decimal) else x) for k, x in v.items()})
     return out
+
+
+def greedy_settle(balances: List[dict]) -> List[dict]:
+    """Pure greedy debt-simplification — the algorithm that gives "≤ N−1
+    transfers for N members". Pulled out of compute_settlement so it can
+    be unit-tested without a DB, and reused on the frontend.
+
+    Input rows need at minimum: member_id, net. Returns transfer dicts
+    with from/to member_id and amount.
+    """
+    creditors = sorted(
+        [(b["member_id"], Decimal(str(b["net"]))) for b in balances if b["net"] > 0.005],
+        key=lambda x: -x[1],
+    )
+    debtors = sorted(
+        [(b["member_id"], Decimal(str(-b["net"]))) for b in balances if b["net"] < -0.005],
+        key=lambda x: -x[1],
+    )
+    transfers: List[dict] = []
+    i = j = 0
+    while i < len(creditors) and j < len(debtors):
+        c_id, c_amt = creditors[i]
+        d_id, d_amt = debtors[j]
+        amt = min(c_amt, d_amt).quantize(Decimal("0.01"))
+        transfers.append({
+            "from_member_id": d_id,
+            "to_member_id":   c_id,
+            "amount":         float(amt),
+        })
+        creditors[i] = (c_id, c_amt - amt)
+        debtors[j]   = (d_id, d_amt - amt)
+        if creditors[i][1] < Decimal("0.01"): i += 1
+        if debtors[j][1]   < Decimal("0.01"): j += 1
+    return transfers
+
+
+# ── Settlements (off-ledger transfers) ───────────────────────────────
+
+def list_settlements(tracker_id: str) -> List[dict]:
+    return fetchall(
+        """
+        SELECT id, tracker_id, from_member_id, to_member_id, amount, note,
+               marked_by_member_id, settled_at
+        FROM tracker_settlements
+        WHERE tracker_id=%s
+        ORDER BY settled_at DESC
+        """,
+        (tracker_id,),
+    )
+
+
+def record_settlement(
+    tracker_id: str, *, from_member_id: str, to_member_id: str,
+    amount: float, note: Optional[str] = None, marked_by_member_id: Optional[str] = None,
+) -> dict:
+    if from_member_id == to_member_id:
+        raise ValueError("Settlement payer and recipient must be different members")
+    if amount is None or float(amount) <= 0:
+        raise ValueError("Amount must be > 0")
+    # Sanity: both members belong to this tracker.
+    members = fetchall(
+        "SELECT id FROM tracker_members WHERE tracker_id=%s AND id IN (%s,%s)",
+        (tracker_id, from_member_id, to_member_id),
+    )
+    if len(members) != 2:
+        raise ValueError("Both members must belong to this tracker")
+    return execute(
+        """
+        INSERT INTO tracker_settlements (tracker_id, from_member_id, to_member_id,
+                                         amount, note, marked_by_member_id)
+        VALUES (%s,%s,%s,%s,%s,%s)
+        RETURNING *
+        """,
+        (tracker_id, from_member_id, to_member_id, amount, note, marked_by_member_id),
+    )
+
+
+def delete_settlement(settlement_id: str, tracker_id: str) -> bool:
+    """Hard-delete (unsettle). Returns True if a row was removed."""
+    row = fetchone(
+        "SELECT id FROM tracker_settlements WHERE id=%s AND tracker_id=%s",
+        (settlement_id, tracker_id),
+    )
+    if not row:
+        return False
+    execute_void("DELETE FROM tracker_settlements WHERE id=%s", (settlement_id,))
+    return True
 
 
 def compute_settlement(tracker_id: str) -> dict:
@@ -819,41 +924,24 @@ def compute_settlement(tracker_id: str) -> dict:
             e["payments"] = json.loads(e["payments"])
         e["payments"] = e.get("payments") or []
 
-    balances = compute_balances(members, expenses)
-    name_by_id = {m["id"]: m["display_name"] for m in members}
-    upi_by_id  = {m["id"]: m.get("upi_id")    for m in members}
+    settlements = list_settlements(tracker_id)
+    balances    = compute_balances(members, expenses, settlements=settlements)
+    name_by_id  = {m["id"]: m["display_name"] for m in members}
+    upi_by_id   = {m["id"]: m.get("upi_id")    for m in members}
 
-    creditors = sorted(
-        [(b["member_id"], Decimal(str(b["net"]))) for b in balances if b["net"] > 0.005],
-        key=lambda x: -x[1],
-    )
-    debtors = sorted(
-        [(b["member_id"], Decimal(str(-b["net"]))) for b in balances if b["net"] < -0.005],
-        key=lambda x: -x[1],
-    )
-
-    transfers = []
-    i = j = 0
-    while i < len(creditors) and j < len(debtors):
-        c_id, c_amt = creditors[i]
-        d_id, d_amt = debtors[j]
-        amt = min(c_amt, d_amt).quantize(Decimal("0.01"))
-        transfers.append({
-            "from_member_id":   d_id,
-            "from_display_name": name_by_id.get(d_id, "?"),
-            "to_member_id":     c_id,
-            "to_display_name":   name_by_id.get(c_id, "?"),
-            "to_upi_id":         upi_by_id.get(c_id),
-            "amount":           float(amt),
-        })
-        creditors[i] = (c_id, c_amt - amt)
-        debtors[j]   = (d_id, d_amt - amt)
-        if creditors[i][1] < Decimal("0.01"): i += 1
-        if debtors[j][1]   < Decimal("0.01"): j += 1
-
+    transfers = [
+        {
+            **t,
+            "from_display_name": name_by_id.get(t["from_member_id"], "?"),
+            "to_display_name":   name_by_id.get(t["to_member_id"], "?"),
+            "to_upi_id":         upi_by_id.get(t["to_member_id"]),
+        }
+        for t in greedy_settle(balances)
+    ]
     return {
-        "balances":  balances,
-        "transfers": transfers,
+        "balances":    balances,
+        "transfers":   transfers,
+        "settlements": settlements,
     }
 
 

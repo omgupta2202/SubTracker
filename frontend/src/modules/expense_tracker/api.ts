@@ -20,42 +20,76 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// Per-URL GET dedupe — collapses StrictMode's double-mount fetches into
+// one network request. Same pattern as the shared services/api.ts.
+const _inFlight = new Map<string, Promise<any>>();
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method ?? "GET").toUpperCase();
+  const key = method === "GET" ? `GET ${path}` : null;
+  if (key && _inFlight.has(key)) return _inFlight.get(key)! as Promise<T>;
+
   const done = track(kindForMethod(options?.method));
-  try {
+  const p = (async (): Promise<T> => {
+    try {
+      const res = await fetch(`${BASE}${path}`, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+          ...(options?.headers as Record<string, string> | undefined),
+        },
+      });
+      if (res.status === 401) {
+        localStorage.removeItem("auth_token");
+        localStorage.removeItem("auth_user");
+        window.dispatchEvent(new Event("subtracker:logout"));
+        throw new Error("Unauthorized");
+      }
+      const json = await res.json() as { data: T | null; error: string | null };
+      if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
+      return json.data as T;
+    } finally { done(); }
+  })();
+
+  if (key) {
+    _inFlight.set(key, p);
+    p.finally(() => {
+      setTimeout(() => {
+        if (_inFlight.get(key) === p) _inFlight.delete(key);
+      }, 1500);
+    });
+  }
+  return p;
+}
+
+async function guestRequest<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method ?? "GET").toUpperCase();
+  const key = method === "GET" ? `guestGET ${path}` : null;
+  if (key && _inFlight.has(key)) return _inFlight.get(key)! as Promise<T>;
+
+  const p = (async (): Promise<T> => {
     const res = await fetch(`${BASE}${path}`, {
       ...options,
       headers: {
         "Content-Type": "application/json",
-        ...authHeaders(),
         ...(options?.headers as Record<string, string> | undefined),
       },
     });
-    if (res.status === 401) {
-      // Hand-off to the host's auth context — same event the shared
-      // services/api.ts dispatches. Avoids forcing a hard reload here.
-      localStorage.removeItem("auth_token");
-      localStorage.removeItem("auth_user");
-      window.dispatchEvent(new Event("subtracker:logout"));
-      throw new Error("Unauthorized");
-    }
     const json = await res.json() as { data: T | null; error: string | null };
     if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
     return json.data as T;
-  } finally { done(); }
-}
+  })();
 
-async function guestRequest<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options?.headers as Record<string, string> | undefined),
-    },
-  });
-  const json = await res.json() as { data: T | null; error: string | null };
-  if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
-  return json.data as T;
+  if (key) {
+    _inFlight.set(key, p);
+    p.finally(() => {
+      setTimeout(() => {
+        if (_inFlight.get(key) === p) _inFlight.delete(key);
+      }, 1500);
+    });
+  }
+  return p;
 }
 
 /* ── Types ──────────────────────────────────────────────────────────── */
@@ -120,6 +154,8 @@ export interface TrackerDetail extends TrackerSummary {
   expenses: TrackerExpense[];
   balances: TrackerBalance[];
   categories?: TrackerCategory[];
+  /** Off-ledger settlements; folded into balances already on the server. */
+  settlements?: TrackerRecordedSettlement[];
 }
 export interface TrackerTransfer {
   from_member_id: string;
@@ -129,7 +165,24 @@ export interface TrackerTransfer {
   to_upi_id: string | null;
   amount: number;
 }
-export interface TrackerSettlement { balances: TrackerBalance[]; transfers: TrackerTransfer[] }
+/** Recorded off-ledger payment ("Mark as paid"). Adjusts balances so the
+ *  pair stops appearing in the pending-transfer list. */
+export interface TrackerRecordedSettlement {
+  id: string;
+  tracker_id: string;
+  from_member_id: string;
+  to_member_id: string;
+  amount: number;
+  note: string | null;
+  marked_by_member_id: string | null;
+  settled_at: string;
+}
+export interface TrackerSettlement {
+  balances: TrackerBalance[];
+  transfers: TrackerTransfer[];
+  /** History of recorded "marked paid" settlements. */
+  settlements: TrackerRecordedSettlement[];
+}
 export interface TrackerTemplate {
   slug: string;
   label: string;
@@ -147,7 +200,11 @@ export interface ImportRow {
   split_with?: string[] | null;
 }
 
-/* ── Owner endpoints ───────────────────────────────────────────────── */
+/* ── Owner endpoints ─────────────────────────────────────────────────
+   StrictMode dev double-fetch is handled at the `request()` layer above
+   (1.5s in-flight + immediately-repeated GET dedupe), so plain calls
+   here are fine. Templates rarely change; if they ever become heavy
+   we can layer a longer TTL cache on top. */
 
 export const listTrackerTemplates = () =>
   request<TrackerTemplate[]>("/trackers/templates");
@@ -237,6 +294,16 @@ export const deleteTrackerCategory = (id: string, cid: string) =>
 
 export const getTrackerSettlement = (id: string) =>
   request<TrackerSettlement>(`/trackers/${id}/settlement`);
+
+export const recordTrackerSettlement = (
+  id: string,
+  d: { from_member_id: string; to_member_id: string; amount: number; note?: string },
+) => request<TrackerRecordedSettlement>(
+  `/trackers/${id}/settlements`,
+  { method: "POST", body: JSON.stringify(d) },
+);
+export const deleteTrackerSettlement = (id: string, sid: string) =>
+  request<{ deleted: boolean }>(`/trackers/${id}/settlements/${sid}`, { method: "DELETE" });
 
 /* ── Guest endpoints ───────────────────────────────────────────────── */
 

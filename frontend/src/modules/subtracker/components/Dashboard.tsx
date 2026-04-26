@@ -64,6 +64,19 @@ export function Dashboard() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [tourOpen, dismissTour] = useOnboarding(user?.id);
+
+  // Listen to global shortcut events fired by ShortcutsProvider:
+  //   `/` → open the palette in search-mode
+  //   `n` → open the palette ready to add
+  // Both lead to the same surface; the palette is search-and-add in one.
+  useEffect(() => {
+    function onShortcut(e: Event) {
+      const which = (e as CustomEvent).detail;
+      if (which === "search" || which === "new") setPaletteOpen(true);
+    }
+    window.addEventListener("subtracker:shortcut", onShortcut);
+    return () => window.removeEventListener("subtracker:shortcut", onShortcut);
+  }, []);
   const [activeCard, setActiveCard] = useState<{ id: string; name: string; last4: string | null; bank: string | null } | null>(null);
   const [filters, setFilters] = useState<DashboardFilters>(loadFilters);
   const [attentionOpen, setAttentionOpen] = useState(false);

@@ -1,0 +1,4 @@
+# Dev-only deps. Install with `pip install -r requirements-dev.txt` on top
+# of the regular requirements.txt. Kept separate so production images
+# don't ship pytest, mypy, etc.
+pytest>=8.0

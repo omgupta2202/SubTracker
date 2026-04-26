@@ -360,6 +360,47 @@ def settlement(tracker_id):
     return ok(trackers.compute_settlement(tracker_id))
 
 
+# ── Settlements (off-ledger transfers) ──────────────────────────────────────
+
+@bp.post("/<tracker_id>/settlements")
+def add_settlement(tracker_id):
+    """Record a "Mark as paid" — X paid Y outside the tracker. Adjusts
+    balances so the next settlement round drops or shrinks this pair."""
+    tracker = fetchone("SELECT * FROM trackers WHERE id=%s", (tracker_id,))
+    if not tracker or not trackers._user_can_view(tracker, g.user_id):
+        return err("Tracker not found", 404)
+    body = request.get_json() or {}
+    e = require_fields(body, "from_member_id", "to_member_id", "amount")
+    if e:
+        return e
+    me = trackers.member_for_user(tracker_id, g.user_id)
+    try:
+        row = trackers.record_settlement(
+            tracker_id,
+            from_member_id=body["from_member_id"],
+            to_member_id=body["to_member_id"],
+            amount=float(body["amount"]),
+            note=body.get("note"),
+            marked_by_member_id=me["id"] if me else None,
+        )
+    except ValueError as ex:
+        return err(str(ex), 400)
+    return ok(row), 201
+
+
+@bp.delete("/<tracker_id>/settlements/<sid>")
+def remove_settlement(tracker_id, sid):
+    """Unsettle — re-opens the balance for that pair. Any tracker member
+    can remove (the alternative is asking the creator to manually fix it,
+    which is friction nobody wants when correcting a mistaken tap)."""
+    tracker = fetchone("SELECT * FROM trackers WHERE id=%s", (tracker_id,))
+    if not tracker or not trackers._user_can_view(tracker, g.user_id):
+        return err("Tracker not found", 404)
+    if not trackers.delete_settlement(sid, tracker_id):
+        return err("Settlement not found", 404)
+    return ok({"deleted": True})
+
+
 # ── Guest-side (token-auth) ─────────────────────────────────────────────────
 
 guest_bp = Blueprint("tracker_guest", __name__, url_prefix="/api/trackers/guest")

@@ -58,48 +58,85 @@ async function verifyTokenStillValid(): Promise<boolean> {
   return inFlightVerify;
 }
 
+/**
+ * Per-URL GET dedupe.
+ *
+ * React's <StrictMode> intentionally double-mounts components in dev,
+ * which fires every effect twice — including data-fetching effects on
+ * every dashboard hook. The result is two identical GETs back-to-back.
+ *
+ * Solution: collapse concurrent + immediately-repeated GETs to the same
+ * URL into a single in-flight Promise. Window is short (1.5s) so the
+ * dedupe only catches StrictMode's repeat mount; deliberate refresh
+ * patterns (refetch on focus, polling, "Refresh" button) still hit the
+ * server. POSTs/PUTs/DELETEs are never deduplicated.
+ */
+const _inFlight = new Map<string, Promise<any>>();
+
+function dedupeKey(method: string, path: string): string | null {
+  if (method !== "GET") return null;
+  return `GET ${path}`;
+}
+
 /** All backend responses are wrapped: { data: T | null, error: string | null } */
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method ?? "GET").toUpperCase();
+  const key = dedupeKey(method, path);
+  if (key && _inFlight.has(key)) return _inFlight.get(key)! as Promise<T>;
+
   const done = track(kindForMethod(options?.method));
-  try {
-    const res = await fetch(`${BASE}${path}`, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...getAuthHeaders(),
-        ...(options?.headers as Record<string, string> | undefined),
-      },
-    });
+  const p = (async (): Promise<T> => {
+    try {
+      const res = await fetch(`${BASE}${path}`, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+          ...(options?.headers as Record<string, string> | undefined),
+        },
+      });
 
-    if (res.status === 401) {
-      // Skip the verify dance for the verify endpoint itself.
-      const isVerifyCall = path === "/auth/me";
-      const hadToken = !!localStorage.getItem("auth_token");
-      if (hadToken && !isVerifyCall) {
-        const stillValid = await verifyTokenStillValid();
-        if (stillValid) {
-          // Transient 401 — surface the error but keep the session.
-          throw new Error("Request failed (please retry)");
+      if (res.status === 401) {
+        // Skip the verify dance for the verify endpoint itself.
+        const isVerifyCall = path === "/auth/me";
+        const hadToken = !!localStorage.getItem("auth_token");
+        if (hadToken && !isVerifyCall) {
+          const stillValid = await verifyTokenStillValid();
+          if (stillValid) {
+            // Transient 401 — surface the error but keep the session.
+            throw new Error("Request failed (please retry)");
+          }
         }
+        // Token is genuinely invalid — clear and surface a logout signal.
+        localStorage.removeItem("auth_token");
+        localStorage.removeItem("auth_user");
+        window.dispatchEvent(new Event("subtracker:logout"));
+        throw new Error("Unauthorized");
       }
-      // Token is genuinely invalid — clear and surface a logout signal.
-      // No window.location.reload(): React rerenders cleanly via the
-      // auth context once `auth_token` is gone and a future 401 arrives.
-      localStorage.removeItem("auth_token");
-      localStorage.removeItem("auth_user");
-      window.dispatchEvent(new Event("subtracker:logout"));
-      throw new Error("Unauthorized");
-    }
 
-    const json = await res.json() as { data: T | null; error: string | null };
+      const json = await res.json() as { data: T | null; error: string | null };
 
-    if (!res.ok || json.error) {
-      throw new Error(json.error ?? `HTTP ${res.status}`);
+      if (!res.ok || json.error) {
+        throw new Error(json.error ?? `HTTP ${res.status}`);
+      }
+      return json.data as T;
+    } finally {
+      done();
     }
-    return json.data as T;
-  } finally {
-    done();
+  })();
+
+  if (key) {
+    _inFlight.set(key, p);
+    // Clear after a short window. Doing it on resolution would still
+    // let StrictMode's repeat fire a fresh request because the second
+    // mount happens on the next tick — keep the entry around 1.5s.
+    p.finally(() => {
+      setTimeout(() => {
+        if (_inFlight.get(key) === p) _inFlight.delete(key);
+      }, 1500);
+    });
   }
+  return p;
 }
 
 // ── Subscriptions ──────────────────────────────────────────────────────────

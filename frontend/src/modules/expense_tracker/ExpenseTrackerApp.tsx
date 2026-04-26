@@ -17,7 +17,7 @@ import * as api from "./api";
 import type {
   TrackerSummary, TrackerDetail, TrackerMember, TrackerExpense, TrackerExpenseSplit,
   TrackerCategory,
-  TrackerSettlement, TrackerTransfer,
+  TrackerSettlement, TrackerTransfer, TrackerRecordedSettlement,
 } from "./api";
 
 /**
@@ -181,6 +181,13 @@ export function ExpenseTrackerApp({ open, standalone = false, initialTrackerId =
               await api.updateTracker(detail.id, { status: "settled" });
               await reloadDetail();
               setView("detail");
+            }}
+            onChange={async () => {
+              // Mark-paid / undo both need: refresh the settlement plan
+              // (re-runs greedy with new balances) AND the detail (so
+              // tracker.balances + tracker.settlements stay coherent).
+              setSettlement(await api.getTrackerSettlement(detail.id));
+              await reloadDetail();
             }}
           />
         )}
@@ -445,6 +452,31 @@ function DetailView({
   const [showImport, setShowImport] = useState(false);
   const [tab, setTab]               = useState<"activity" | "stats">("activity");
   const [search, setSearch]         = useState("");
+
+  // Global shortcut hooks — fired by <ShortcutsProvider> in App.tsx.
+  //   `/` → focus the search input (we use the data-tour="activity" tab
+  //         marker since the input is conditionally rendered).
+  //   `n` → open the new-expense sheet.
+  useEffect(() => {
+    function onShortcut(e: Event) {
+      const which = (e as CustomEvent).detail;
+      if (which === "new") {
+        setSeedPayerId(undefined);
+        setShowSheet("new");
+      } else if (which === "search") {
+        // Activity tab + focus the input. Defer one tick so the input
+        // exists if we just switched tabs.
+        setTab("activity");
+        setTimeout(() => {
+          document.querySelector<HTMLInputElement>(
+            "input[placeholder='Search expenses or payers…']",
+          )?.focus();
+        }, 0);
+      }
+    }
+    window.addEventListener("subtracker:shortcut", onShortcut);
+    return () => window.removeEventListener("subtracker:shortcut", onShortcut);
+  }, []);
 
   const totalSpent = useMemo(
     () => tracker.expenses.reduce((s, e) => s + Number(e.amount || 0), 0),
@@ -1381,50 +1413,89 @@ function InviteSheet({
 /* ────────────────────────── SETTLE ────────────────────────── */
 
 function SettleView({
-  tracker, settlement, onClose,
+  tracker, settlement, onClose, onChange,
 }: {
   tracker: TrackerDetail;
   settlement: TrackerSettlement;
   onClose: () => void;
+  /** Refetch tracker + settlement after a record/unrecord operation. */
+  onChange: () => Promise<void>;
 }) {
   const transfers = settlement.transfers;
+  const recorded  = settlement.settlements ?? [];
+  const nameOf = (id: string) =>
+    tracker.members.find(m => m.id === id)?.display_name ?? "?";
+
   if (transfers.length === 0) {
     return (
-      <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900 p-8 text-center">
-        <Check size={28} className="mx-auto text-emerald-400" />
-        <h2 className="text-lg font-semibold text-zinc-100 mt-3">Already settled ✓</h2>
-        <p className="text-sm text-zinc-500 mt-1">Everyone's even. No transfers needed.</p>
-        {tracker.status !== "settled" && (
-          <button onClick={onClose} className="mt-5 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium">
-            Mark as settled
-          </button>
+      <div className="flex flex-col gap-4">
+        <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900 p-8 text-center">
+          <Check size={28} className="mx-auto text-emerald-400" />
+          <h2 className="text-lg font-semibold text-zinc-100 mt-3">Already settled ✓</h2>
+          <p className="text-sm text-zinc-500 mt-1">Everyone's even. No pending transfers.</p>
+          {tracker.status !== "settled" && (
+            <button onClick={onClose} className="mt-5 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium">
+              Mark tracker as settled
+            </button>
+          )}
+        </div>
+        {recorded.length > 0 && (
+          <RecordedSettlements recorded={recorded} nameOf={nameOf} trackerId={tracker.id} onChange={onChange} />
         )}
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       <p className="text-sm text-zinc-400">
-        Minimum {transfers.length} transfer{transfers.length !== 1 ? "s" : ""} to clear all balances:
+        Minimum {transfers.length} transfer{transfers.length !== 1 ? "s" : ""} to clear all balances. Tap <strong>Mark paid</strong> after a transfer is actually sent.
       </p>
       <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900">
         {transfers.map((t, i) => (
-          <TransferRow key={i} transfer={t} />
+          <TransferRow key={i} transfer={t} trackerId={tracker.id} onChange={onChange} />
         ))}
       </div>
+      {recorded.length > 0 && (
+        <RecordedSettlements recorded={recorded} nameOf={nameOf} trackerId={tracker.id} onChange={onChange} />
+      )}
       <button onClick={onClose}
               className="self-end mt-2 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium">
-        Mark as settled
+        Mark tracker as settled
       </button>
     </div>
   );
 }
 
-function TransferRow({ transfer }: { transfer: TrackerTransfer }) {
+function TransferRow({
+  transfer, trackerId, onChange,
+}: {
+  transfer: TrackerTransfer;
+  trackerId: string;
+  onChange: () => Promise<void>;
+}) {
+  const [marking, setMarking] = useState(false);
   const upi = transfer.to_upi_id
     ? `upi://pay?pa=${encodeURIComponent(transfer.to_upi_id)}&pn=${encodeURIComponent(transfer.to_display_name)}&am=${transfer.amount.toFixed(2)}&cu=INR&tn=${encodeURIComponent("Tracker settlement")}`
     : null;
+
+  async function markPaid() {
+    if (!confirm(
+      `Record ${transfer.from_display_name} → ${transfer.to_display_name} ${inr(transfer.amount)} as paid? ` +
+      `This adjusts balances so the pair drops out of the next settlement round.`,
+    )) return;
+    setMarking(true);
+    try {
+      await api.recordTrackerSettlement(trackerId, {
+        from_member_id: transfer.from_member_id,
+        to_member_id:   transfer.to_member_id,
+        amount:         transfer.amount,
+      });
+      await onChange();
+    } catch (err) { alert((err as Error).message); }
+    finally { setMarking(false); }
+  }
+
   return (
     <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-800/60 last:border-0">
       <div className="flex-1 min-w-0 flex items-center gap-2">
@@ -1433,14 +1504,73 @@ function TransferRow({ transfer }: { transfer: TrackerTransfer }) {
         <span className="text-sm text-zinc-200 truncate">{transfer.to_display_name}</span>
       </div>
       <span className="num text-sm font-semibold text-zinc-100 shrink-0">{inr(transfer.amount)}</span>
-      {upi ? (
-        <a href={upi} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-violet-500/40 text-violet-200 hover:bg-violet-500/10 text-xs">
+      {upi && (
+        <a href={upi}
+           title={`Open UPI app pre-filled to pay ${transfer.to_display_name} ${inr(transfer.amount)}`}
+           className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-violet-500/40 text-violet-200 hover:bg-violet-500/10 text-xs">
           <ExternalLink size={11} /> UPI
         </a>
-      ) : (
-        <span className="text-[11px] text-zinc-600">no UPI on file</span>
+      )}
+      <button
+        onClick={markPaid}
+        disabled={marking}
+        title="Record this transfer as paid — closes the loop on the balance"
+        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20 text-xs disabled:opacity-50"
+      >
+        {marking ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
+        Mark paid
+      </button>
+      {!upi && (
+        <span title="Recipient hasn't set their UPI VPA — they can add it from their guest page or profile."
+              className="text-[11px] text-zinc-600 cursor-help">no UPI</span>
       )}
     </div>
+  );
+}
+
+function RecordedSettlements({
+  recorded, nameOf, trackerId, onChange,
+}: {
+  recorded: TrackerRecordedSettlement[];
+  nameOf: (id: string) => string;
+  trackerId: string;
+  onChange: () => Promise<void>;
+}) {
+  const [unbusy, setUnbusy] = useState<string | null>(null);
+  return (
+    <section>
+      <SectionTitle>Already settled</SectionTitle>
+      <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 mt-2 overflow-hidden">
+        {recorded.map(s => (
+          <div key={s.id} className="flex items-center gap-3 px-4 py-2.5 border-b border-emerald-500/10 last:border-0">
+            <Check size={12} className="text-emerald-400 shrink-0" />
+            <div className="flex-1 min-w-0 flex items-center gap-2">
+              <span className="text-sm text-zinc-200 truncate">{nameOf(s.from_member_id)}</span>
+              <ArrowRight size={11} className="text-zinc-600" />
+              <span className="text-sm text-zinc-200 truncate">{nameOf(s.to_member_id)}</span>
+            </div>
+            <span className="num text-sm font-medium text-zinc-100 shrink-0">{inr(s.amount)}</span>
+            <span className="text-[11px] text-zinc-500 shrink-0">{relativeTime(s.settled_at)}</span>
+            <button
+              onClick={async () => {
+                if (!confirm("Undo this settlement? The pair will go back into the pending-transfers list.")) return;
+                setUnbusy(s.id);
+                try {
+                  await api.deleteTrackerSettlement(trackerId, s.id);
+                  await onChange();
+                } catch (err) { alert((err as Error).message); }
+                finally { setUnbusy(null); }
+              }}
+              disabled={unbusy === s.id}
+              title="Undo — re-opens the balance for this pair"
+              className="text-[11px] text-zinc-500 hover:text-red-300 disabled:opacity-50"
+            >
+              {unbusy === s.id ? "…" : "undo"}
+            </button>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -2126,7 +2256,7 @@ function CategoryStats({ tracker }: { tracker: TrackerDetail }) {
 
 /* ────────────────────────── helpers ────────────────────────── */
 
-function groupByDate(expenses: TrackerExpense[]): { date: string; total: number; items: TrackerExpense[] }[] {
+export function groupByDate(expenses: TrackerExpense[]): { date: string; total: number; items: TrackerExpense[] }[] {
   const groups: Record<string, TrackerExpense[]> = {};
   for (const e of expenses) {
     (groups[e.expense_date] ??= []).push(e);
@@ -2154,7 +2284,7 @@ function formatDayHeader(iso: string): string {
 /** Greedy debt simplification — same algo as backend's compute_settlement,
  *  used here so the Stats panel can show pending transfers without an
  *  extra round-tracker. */
-function greedyDebt(balances: { member_id: string; net: number }[]): { from: string; to: string; amount: number }[] {
+export function greedyDebt(balances: { member_id: string; net: number }[]): { from: string; to: string; amount: number }[] {
   const cred = balances.filter(b => b.net > 0.005).map(b => ({ ...b })).sort((a, b) => b.net - a.net);
   const debt = balances.filter(b => b.net < -0.005).map(b => ({ ...b, net: -b.net })).sort((a, b) => b.net - a.net);
   const out: { from: string; to: string; amount: number }[] = [];

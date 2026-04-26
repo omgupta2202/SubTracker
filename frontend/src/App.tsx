@@ -6,6 +6,7 @@ import { InertWhenBusy } from "@/components/InertWhenBusy";
 import { PWAInstallPrompt } from "@/components/PWAInstallPrompt";
 import { ExpenseTrackerApp, ExpenseTrackerGuestRoute } from "@/modules/expense_tracker";
 import { EmailSettingsPage } from "@/components/EmailSettingsPage";
+import { ShortcutsProvider } from "@/components/Shortcuts";
 import { useRoute, matchGuestTrackerToken, matchTrackersRoute, matchSettingsRoute, navigate } from "@/lib/router";
 
 /**
@@ -83,6 +84,7 @@ export default function App() {
             : <Dashboard />}
       </InertWhenBusy>
       <PWAInstallPrompt />
+      <ShortcutsProvider />
     </>
   );
 }

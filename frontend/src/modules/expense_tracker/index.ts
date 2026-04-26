@@ -10,5 +10,5 @@ export type {
   TrackerSummary, TrackerDetail, TrackerMember, TrackerExpense,
   TrackerExpenseSplit, TrackerExpensePayment, TrackerCategory,
   TrackerBalance, TrackerTransfer, TrackerSettlement, TrackerTemplate,
-  ImportRow,
+  TrackerRecordedSettlement, ImportRow,
 } from "./api";
