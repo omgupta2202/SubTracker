@@ -12,15 +12,15 @@ from decimal import Decimal
 from flask import Blueprint, request, g
 from db import fetchall, fetchone, execute, execute_void
 from utils import ok, err, require_fields
-from services import ledger
-from services.allocation_engine import invalidate as invalidate_allocation
+from modules.subtracker.services import ledger
+from modules.subtracker.services.allocation_engine import invalidate as invalidate_allocation
 
 bp = Blueprint("accounts", __name__, url_prefix="/api/accounts")
 
 
 def _invalidate_dashboard(user_id: str) -> None:
     try:
-        from routes.dashboard import invalidate_summary_cache
+        from modules.subtracker.routes.dashboard import invalidate_summary_cache
         invalidate_summary_cache(user_id)
     except Exception:
         pass

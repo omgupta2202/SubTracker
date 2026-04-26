@@ -10,17 +10,17 @@ from datetime import date, datetime
 from decimal import Decimal
 from flask import Blueprint, request, g
 from utils import ok, err, require_fields
-from services import ledger
-from services.ledger import LedgerError
-from services.allocation_engine import invalidate as invalidate_allocation
-from services.categorization import infer_category
+from modules.subtracker.services import ledger
+from modules.subtracker.services.ledger import LedgerError
+from modules.subtracker.services.allocation_engine import invalidate as invalidate_allocation
+from modules.subtracker.services.categorization import infer_category
 from db import fetchone, execute_void
 
 
 def _invalidate_dashboard(user_id: str) -> None:
     """Soft import — avoid a circular dep with routes.dashboard at import time."""
     try:
-        from routes.dashboard import invalidate_summary_cache
+        from modules.subtracker.routes.dashboard import invalidate_summary_cache
         invalidate_summary_cache(user_id)
     except Exception:
         pass

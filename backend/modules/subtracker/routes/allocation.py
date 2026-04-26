@@ -4,7 +4,7 @@ Backed by the new AllocationEngine (ledger-derived balances).
 """
 from flask import Blueprint, request, g
 from utils import ok, err
-from services.allocation_engine import compute, invalidate, AllocationError
+from modules.subtracker.services.allocation_engine import compute, invalidate, AllocationError
 
 bp = Blueprint("allocation", __name__, url_prefix="/api/smart-allocation")
 

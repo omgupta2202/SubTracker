@@ -28,7 +28,9 @@ from typing import Optional
 
 from db import fetchall, fetchone, execute_void
 from modules.auth.email import send_email
-from services import magic_links, snoozes, unsubscribe
+from modules.subtracker.services import magic_links
+from modules.subtracker.services import snoozes
+from modules.subtracker.services import unsubscribe
 
 log = logging.getLogger(__name__)
 

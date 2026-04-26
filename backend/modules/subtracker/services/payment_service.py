@@ -15,7 +15,7 @@ from decimal import Decimal
 from typing import Optional
 
 from db import fetchall, fetchone, execute, execute_void, get_conn
-from services import ledger
+from modules.subtracker.services import ledger
 
 
 class PaymentError(Exception):
@@ -356,7 +356,7 @@ def _mark_occurrence_paid(cur, obligation_id: str, amount: Decimal, payment_id: 
         )
         obl = cur.fetchone()
         if obl:
-            from services.obligation_service import _compute_next_due
+            from modules.subtracker.services.obligation_service import _compute_next_due
             next_due = _compute_next_due(
                 obl["frequency"], obl["due_day"],
                 obl["next_due_date"] or obl["anchor_date"]

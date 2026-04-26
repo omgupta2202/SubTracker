@@ -19,8 +19,9 @@ from datetime import date, datetime
 from flask import Blueprint, request, Response
 
 from db import fetchone, execute_void
-from services import magic_links, snoozes
-from services import ledger
+from modules.subtracker.services import magic_links
+from modules.subtracker.services import snoozes
+from modules.subtracker.services import ledger
 from utils import ok, err
 
 bp = Blueprint("reminder_actions", __name__, url_prefix="/api/reminders/action")
@@ -214,9 +215,9 @@ def _do_mark_paid(token: dict, payload: dict, user_id: str) -> Response:
         )
         # Bust caches that depend on this
         try:
-            from routes.dashboard import invalidate_summary_cache
+            from modules.subtracker.routes.dashboard import invalidate_summary_cache
             invalidate_summary_cache(user_id)
-            from services.allocation_engine import invalidate as inv_alloc
+            from modules.subtracker.services.allocation_engine import invalidate as inv_alloc
             inv_alloc(user_id)
         except Exception:
             pass
@@ -237,7 +238,7 @@ def _do_mark_paid(token: dict, payload: dict, user_id: str) -> Response:
             (target_id, user_id),
         )
         try:
-            from routes.dashboard import invalidate_summary_cache
+            from modules.subtracker.routes.dashboard import invalidate_summary_cache
             invalidate_summary_cache(user_id)
         except Exception:
             pass

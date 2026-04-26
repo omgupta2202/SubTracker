@@ -11,8 +11,8 @@ GET  /api/payments/:id              detail
 from decimal import Decimal
 from flask import Blueprint, request, g
 from utils import ok, err, require_fields
-from services import payment_service
-from services.payment_service import PaymentError
+from modules.subtracker.services import payment_service
+from modules.subtracker.services.payment_service import PaymentError
 
 bp = Blueprint("payments", __name__, url_prefix="/api/payments")
 

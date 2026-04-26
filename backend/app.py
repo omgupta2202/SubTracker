@@ -35,34 +35,16 @@ from flask import g
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt_identity
 from urllib.parse import urlsplit
 
-# ── Legacy routes (kept for backward compat) ──────────────────────────────────
-from routes.subscriptions      import bp as subscriptions_bp
-from routes.emis               import bp as emis_bp
-from routes.cards              import bp as cards_bp
-from routes.accounts           import bp as accounts_bp
-from routes.receivables        import bp as receivables_bp
-from routes.capex              import bp as capex_bp
-from routes.rent               import bp as rent_bp
-from routes.snapshots          import bp as snapshots_bp
-from routes.card_transactions  import bp as card_transactions_bp
-
-# ── New ledger-architecture routes ────────────────────────────────────────────
-from routes.financial_accounts import bp as financial_accounts_bp
-from routes.ledger_routes      import bp as ledger_bp
-from routes.payments           import bp as payments_bp
-from routes.obligations        import bp as obligations_bp
-from routes.billing_cycles     import bp as billing_cycles_bp
-from routes.allocation         import bp as allocation_bp
-from routes.daily_logs         import bp as daily_logs_bp
-from routes.dashboard          import bp as dashboard_bp
-from routes.reminders          import bp as reminders_bp
-from routes.reminder_actions   import bp as reminder_actions_bp
-from routes.unsubscribe        import bp as unsubscribe_bp
-from modules.expense_tracker   import bp as trackers_bp, guest_bp as trackers_guest_bp
-
-# ── Modules ───────────────────────────────────────────────────────────────────
-from modules.auth  import bp as auth_bp
-from modules.gmail import bp as gmail_bp
+# ── Modules — each owns a vertical slice of the product ─────────────────────
+# `subtracker` = personal finance dashboard (subs, EMIs, cards, accounts,
+# ledger, payments, dashboard summary, reminders, unsubscribe …).
+# `expense_tracker` = group expense splitter.
+# Both can be lifted into their own microservices later — the host just
+# wires their blueprints onto a single Flask process today.
+from modules.subtracker     import BLUEPRINTS as SUBTRACKER_BPS
+from modules.expense_tracker import bp as trackers_bp, guest_bp as trackers_guest_bp
+from modules.auth           import bp as auth_bp
+from modules.gmail          import bp as gmail_bp
 
 
 def create_app() -> Flask:
@@ -89,35 +71,14 @@ def create_app() -> Flask:
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=access_days)
     JWTManager(app)
 
-    for bp in (
-        # Legacy
-        subscriptions_bp,
-        emis_bp,
-        cards_bp,
-        accounts_bp,
-        receivables_bp,
-        capex_bp,
-        rent_bp,
-        snapshots_bp,
-        card_transactions_bp,
-        # New
-        financial_accounts_bp,
-        ledger_bp,
-        payments_bp,
-        obligations_bp,
-        billing_cycles_bp,
-        allocation_bp,
-        daily_logs_bp,
-        dashboard_bp,
-        reminders_bp,
-        reminder_actions_bp,
-        unsubscribe_bp,
-        trackers_bp,
-        trackers_guest_bp,
-        # Modules
-        auth_bp,
-        gmail_bp,
-    ):
+    # Register every module's blueprints. The host doesn't pick or order
+    # routes — modules own that internally. Adding a new module is a
+    # one-line change here.
+    for bp in [
+        *SUBTRACKER_BPS,
+        trackers_bp, trackers_guest_bp,
+        auth_bp, gmail_bp,
+    ]:
         app.register_blueprint(bp)
 
     # Public health endpoints — used by Fly.io's http_service health check

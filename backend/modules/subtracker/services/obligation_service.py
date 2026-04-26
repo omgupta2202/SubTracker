@@ -223,7 +223,7 @@ def get_by_id(obligation_id: str, user_id: str) -> Optional[dict]:
 
 def _attach_emi_math(row: dict) -> dict:
     """Compute EMI interest/principal split for a recurring_obligations row."""
-    from services.emi_math import compute_emi_math
+    from modules.subtracker.services.emi_math import compute_emi_math
     return compute_emi_math(
         emi_amount=row.get("amount"),
         principal=row.get("principal"),

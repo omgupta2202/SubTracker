@@ -1,5 +1,5 @@
 from flask import Blueprint, request, g
-from services.snapshots import get_snapshots
+from modules.subtracker.services.snapshots import get_snapshots
 from utils import ok, err
 
 bp = Blueprint("snapshots", __name__, url_prefix="/api/snapshots")

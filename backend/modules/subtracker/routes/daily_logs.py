@@ -10,7 +10,7 @@ GET  /api/daily-logs/compare      diff two dates
 GET  /api/daily-logs/:date        get a single snapshot
 """
 from flask import Blueprint, request, g
-from services import snapshot_service
+from modules.subtracker.services import snapshot_service
 from utils import ok, err
 
 bp = Blueprint("daily_logs", __name__, url_prefix="/api/daily-logs")

@@ -31,10 +31,10 @@ from decimal import Decimal
 from flask import Blueprint, request, g
 from utils import ok, err
 from db import fetchall, fetchone
-from services import ledger
-from services import snapshot_service
-from services import credit_card_cycles as cc_cycles
-from services.obligation_service import get_upcoming, get_monthly_obligations_total
+from modules.subtracker.services import ledger
+from modules.subtracker.services import snapshot_service
+from modules.subtracker.services import credit_card_cycles as cc_cycles
+from modules.subtracker.services.obligation_service import get_upcoming, get_monthly_obligations_total
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +91,12 @@ def _ensure_today_snapshot(user_id: str) -> None:
                 (user_id, today_iso),
             )
             if not existing:
-                snapshot_service.capture(user_id, trigger="auto_dashboard")
+                # `snapshot_trigger` enum has no `auto_dashboard` value —
+                # use the catch-all `daily_cron` (this IS effectively a
+                # daily auto-capture, just user-triggered by visiting the
+                # dashboard rather than driven by a cron). Avoids enum
+                # InvalidTextRepresentation without a migration.
+                snapshot_service.capture(user_id, trigger="daily_cron")
         except Exception as exc:
             log.warning("auto-snapshot failed for user %s: %s", user_id, exc, exc_info=True)
         finally:
@@ -438,7 +443,7 @@ def summary():
         })
 
     # Filter out items the user has snoozed via email or in-app.
-    from services import snoozes as _snoozes
+    from modules.subtracker.services import snoozes as _snoozes
     _snoozed = _snoozes.active_keys(user_id)
     if _snoozed:
         attention_items = [

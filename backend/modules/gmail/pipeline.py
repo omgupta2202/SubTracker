@@ -25,10 +25,10 @@ from typing import Optional
 from db import fetchall, fetchone, execute, execute_void
 
 from modules.gmail import service as gmail_svc
-from services import ledger
-from services import credit_card_cycles as cc_cycles
-from services.allocation_engine import invalidate as invalidate_allocation
-from services.categorization import infer_category
+from modules.subtracker.services import ledger
+from modules.subtracker.services import credit_card_cycles as cc_cycles
+from modules.subtracker.services.allocation_engine import invalidate as invalidate_allocation
+from modules.subtracker.services.categorization import infer_category
 
 PARSER_VERSION = "2.0"
 

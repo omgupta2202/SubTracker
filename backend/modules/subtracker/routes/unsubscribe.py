@@ -17,7 +17,7 @@ import os
 from typing import Tuple
 from flask import Blueprint, request
 
-from services import unsubscribe
+from modules.subtracker.services import unsubscribe
 
 bp = Blueprint("unsubscribe", __name__, url_prefix="/api/unsubscribe")
 

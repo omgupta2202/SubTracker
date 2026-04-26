@@ -127,8 +127,26 @@ def _best_display_name(txns: List[dict]) -> str:
 
 
 def _detect_cycle(txns: List[dict]) -> Optional[str]:
-    """Look at average gap between consecutive charges, snap to nearest bucket."""
-    dates = sorted(t["effective_date"] for t in txns)
+    """Look at average gap between consecutive charges, snap to nearest bucket.
+
+    `effective_date` arrives from psycopg2 as either a `date` object (when
+    the column is DATE) or a string (when the column is TEXT or coerced
+    in JSON). Coerce to `date` so subtraction works regardless of source.
+    """
+    from datetime import date, datetime
+    def to_date(v) -> Optional[date]:
+        if isinstance(v, date) and not isinstance(v, datetime):
+            return v
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, str) and v:
+            try:
+                return datetime.fromisoformat(v.split("T")[0]).date()
+            except Exception:
+                return None
+        return None
+
+    dates = sorted(d for d in (to_date(t["effective_date"]) for t in txns) if d)
     if len(dates) < 2:
         return None
     gaps = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]

@@ -14,9 +14,9 @@ import psycopg2
 from flask import Blueprint, request, g
 from utils import ok, err
 from db import fetchall, fetchone, execute, execute_void
-from services import ledger
-from services import credit_card_cycles as cc_cycles
-from services.allocation_engine import invalidate as invalidate_allocation
+from modules.subtracker.services import ledger
+from modules.subtracker.services import credit_card_cycles as cc_cycles
+from modules.subtracker.services.allocation_engine import invalidate as invalidate_allocation
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ bp = Blueprint("billing_cycles", __name__, url_prefix="/api/billing-cycles")
 
 def _invalidate_dashboard(user_id: str) -> None:
     try:
-        from routes.dashboard import invalidate_summary_cache
+        from modules.subtracker.routes.dashboard import invalidate_summary_cache
         invalidate_summary_cache(user_id)
     except Exception:
         pass

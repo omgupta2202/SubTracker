@@ -15,7 +15,7 @@ import os
 from flask import Blueprint, request, g
 from utils import ok, err
 from db import execute, fetchone
-from services import reminders
+from modules.subtracker.services import reminders
 
 bp = Blueprint("reminders", __name__, url_prefix="/api/reminders")
 
@@ -88,7 +88,7 @@ def send_test():
 @bp.post("/snooze")
 def snooze_item():
     """In-app snooze for an attention item — same backing store as email snooze."""
-    from services import snoozes
+    from modules.subtracker.services import snoozes
     body = request.get_json(silent=True) or {}
     item_key = body.get("item_key")
     days     = int(body.get("days", 3))
@@ -99,7 +99,7 @@ def snooze_item():
     until = snoozes.snooze(g.user_id, item_key, days)
     # Also bust the dashboard cache so the popover refreshes immediately.
     try:
-        from routes.dashboard import invalidate_summary_cache
+        from modules.subtracker.routes.dashboard import invalidate_summary_cache
         invalidate_summary_cache(g.user_id)
     except Exception:
         pass

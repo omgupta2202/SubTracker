@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Dashboard } from "@/components/Dashboard";
+import { Dashboard } from "@/modules/subtracker";
 import { LoginPage, useAuth } from "@/modules/auth";
 import { GlobalProgress } from "@/components/GlobalProgress";
 import { InertWhenBusy } from "@/components/InertWhenBusy";

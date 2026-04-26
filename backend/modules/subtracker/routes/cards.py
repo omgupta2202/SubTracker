@@ -13,16 +13,16 @@ from decimal import Decimal
 from flask import Blueprint, request, g
 from db import fetchall, fetchone, execute, execute_void
 from utils import ok, err, require_fields, days_until
-from services import ledger
-from services import credit_card_cycles as cc_cycles
-from services.allocation_engine import invalidate as invalidate_allocation
+from modules.subtracker.services import ledger
+from modules.subtracker.services import credit_card_cycles as cc_cycles
+from modules.subtracker.services.allocation_engine import invalidate as invalidate_allocation
 
 bp = Blueprint("cards", __name__, url_prefix="/api/cards")
 
 
 def _invalidate_dashboard(user_id: str) -> None:
     try:
-        from routes.dashboard import invalidate_summary_cache
+        from modules.subtracker.routes.dashboard import invalidate_summary_cache
         invalidate_summary_cache(user_id)
     except Exception:
         pass
@@ -110,7 +110,7 @@ def create():
     if outstanding > 0:
         # Seed a current cycle with the legacy "outstanding" value so the
         # ledger answer matches what the user just typed in.
-        from routes.billing_cycles import create_cycle_for_card
+        from modules.subtracker.routes.billing_cycles import create_cycle_for_card
         cycle, _err = create_cycle_for_card(aid, g.user_id, {
             "statement_period": "current",
             "total_billed":     float(outstanding),
@@ -171,7 +171,7 @@ def update(uid: str):
 
     # Outstanding / minimum_due updates are pushed into the current open cycle.
     if "outstanding" in body or "minimum_due" in body:
-        from routes.billing_cycles import _get_current_open_cycle  # type: ignore
+        from modules.subtracker.routes.billing_cycles import _get_current_open_cycle  # type: ignore
         try:
             cycle = _get_current_open_cycle(uid, g.user_id)
         except Exception:

@@ -14,8 +14,8 @@ from decimal import Decimal
 from datetime import date
 from flask import Blueprint, request, g
 from utils import ok, err, require_fields
-from services import obligation_service
-from services.obligation_service import ObligationError
+from modules.subtracker.services import obligation_service
+from modules.subtracker.services.obligation_service import ObligationError
 
 bp = Blueprint("obligations", __name__, url_prefix="/api/obligations")
 

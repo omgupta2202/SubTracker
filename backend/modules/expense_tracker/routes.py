@@ -501,7 +501,7 @@ def _send_invite_email(tracker_id: str, member: dict) -> None:
     invitee has no SubTracker account, we still send (no opt-out exists
     yet) but include a clear unsubscribe link in the footer.
     """
-    from services import unsubscribe  # local import — circular-safe
+    from modules.subtracker.services import unsubscribe# local import — circular-safe
 
     tracker = fetchone("SELECT name, currency FROM trackers WHERE id=%s", (tracker_id,))
     inviter = fetchone(
@@ -668,7 +668,7 @@ def _send_nudge_email(tracker_id: str, member_id: str, *,
     Returns a dict with `sent`, `to`, and `subject` so the route can
     surface confirmation in the UI.
     """
-    from services import unsubscribe  # local — avoids circular at module load
+    from modules.subtracker.services import unsubscribe# local — avoids circular at module load
 
     tracker = fetchone("SELECT id, name, currency FROM trackers WHERE id=%s", (tracker_id,))
     if not tracker:

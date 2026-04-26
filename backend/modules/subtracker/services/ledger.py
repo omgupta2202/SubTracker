@@ -235,7 +235,7 @@ def post_entry(
         and status == "posted"
     ):
         try:
-            from services import credit_card_cycles as cc_cycles
+            from modules.subtracker.services import credit_card_cycles as cc_cycles
             cc_cycles.ensure_entry_cycle_link(
                 entry_id=entry["id"],
                 account_id=account_id,

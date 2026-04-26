@@ -21,8 +21,8 @@ from decimal import Decimal
 from typing import Optional
 
 from db import fetchall, fetchone, execute
-from services import ledger
-from services.obligation_service import get_monthly_obligations_total
+from modules.subtracker.services import ledger
+from modules.subtracker.services.obligation_service import get_monthly_obligations_total
 
 
 CURRENT_SCHEMA_VERSION = 1

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Loader2, Check, BellRing, Mail, Send } from "lucide-react";
-import * as api from "@/services/api";
+import * as api from "@/modules/subtracker/services/api";
 import { cn } from "@/lib/utils";
 import { navigate } from "@/lib/router";
 

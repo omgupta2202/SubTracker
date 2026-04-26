@@ -125,7 +125,7 @@ def recurring_suggestions():
     """
     import logging
     log = logging.getLogger(__name__)
-    from services.recurring_detector import find_recurring_candidates
+    from modules.subtracker.services.recurring_detector import find_recurring_candidates
     try:
         lookback = min(int(request.args.get("lookback_days", 180)), 365)
         min_occ  = max(int(request.args.get("min_occurrences", 2)), 2)
