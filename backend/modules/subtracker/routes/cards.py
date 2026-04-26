@@ -165,9 +165,15 @@ def update(uid: str):
         )
 
     ext_fields = {}
-    if "last4"   in body: ext_fields["last4"]             = body["last4"] or None
-    if "due_day" in body: ext_fields["billing_cycle_day"] = int(body["due_day"])
-    if "note"    in body: ext_fields["reward_program"]    = body["note"] or None
+    if "last4"            in body: ext_fields["last4"]             = body["last4"] or None
+    if "due_day"          in body: ext_fields["billing_cycle_day"] = int(body["due_day"])
+    if "note"             in body: ext_fields["reward_program"]    = body["note"] or None
+    if "credit_limit"     in body:
+        ext_fields["credit_limit"] = (
+            Decimal(str(body["credit_limit"])) if body["credit_limit"] not in (None, "") else None
+        )
+    if "due_date_offset"  in body: ext_fields["due_offset_days"]   = int(body["due_date_offset"])
+    if "due_offset_days"  in body: ext_fields["due_offset_days"]   = int(body["due_offset_days"])
     if ext_fields:
         set_clause = ", ".join(f"{k}=%s" for k in ext_fields)
         execute_void(

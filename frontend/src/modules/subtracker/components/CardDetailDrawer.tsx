@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   X, CreditCard as CardIcon, ChevronDown, ChevronUp, Receipt,
-  ArrowDownToLine, Sparkles, Check, AlertTriangle, Loader2,
+  ArrowDownToLine, Sparkles, Check, AlertTriangle, Loader2, Pencil,
 } from "lucide-react";
 import * as api from "@/modules/subtracker/services/api";
 import type { BillingCycle, AccountLedgerEntry } from "@/modules/subtracker/services/api";
@@ -31,6 +31,10 @@ interface Props {
   cardName: string | null;
   cardLast4: string | null;
   cardBank: string | null;
+  /** When provided, edit form preloads these (closing day, credit limit, due offset). */
+  cardClosingDay?: number | null;
+  cardCreditLimit?: number | null;
+  cardDueOffset?: number | null;
   /** When provided, the user can pay from one of these accounts. */
   accounts: BankAccount[];
   onClose: () => void;
@@ -48,8 +52,21 @@ const STATUS_TONE: Record<StatusKind, string> = {
 };
 
 export function CardDetailDrawer({
-  cardId, cardName, cardLast4, cardBank, accounts, onClose, onChange,
+  cardId, cardName, cardLast4, cardBank,
+  cardClosingDay, cardCreditLimit, cardDueOffset,
+  accounts, onClose, onChange,
 }: Props) {
+  const [editingCard, setEditingCard] = useState(false);
+  const [savingCard, setSavingCard] = useState(false);
+  const [cardErr, setCardErr] = useState<string | null>(null);
+  const [cardDraft, setCardDraft] = useState({
+    name: cardName ?? "",
+    bank: cardBank ?? "",
+    last4: cardLast4 ?? "",
+    due_day: cardClosingDay ?? 1,
+    credit_limit: cardCreditLimit ?? 0,
+    due_date_offset: cardDueOffset ?? 20,
+  });
   const [overview, setOverview] = useState<{
     current_cycle: BillingCycle | null;
     last_statement: BillingCycle | null;
@@ -62,6 +79,7 @@ export function CardDetailDrawer({
   const [payAmount, setPayAmount] = useState("");
   const [payCycleId, setPayCycleId] = useState<string | null>(null);
   const [paySource, setPaySource] = useState<string>("");
+  const payPanelRef = useRef<HTMLDivElement | null>(null);
 
   // Re-fetchable so inline edits / pays on a single statement can refresh
   // the whole drawer without a parent dashboard refetch (still done via
@@ -70,6 +88,29 @@ export function CardDetailDrawer({
     if (!cardId) return;
     const fresh = await api.getBillingCycleOverview(cardId);
     setOverview(fresh);
+  }
+
+  async function saveCard() {
+    if (!cardId) return;
+    setSavingCard(true);
+    setCardErr(null);
+    try {
+      await api.updateCard(cardId, {
+        name: cardDraft.name,
+        bank: cardDraft.bank,
+        last4: cardDraft.last4 || undefined,
+        due_day: Number(cardDraft.due_day),
+        credit_limit: Number(cardDraft.credit_limit) || undefined,
+        due_date_offset: Number(cardDraft.due_date_offset),
+      } as any);
+      setEditingCard(false);
+      await refreshOverview();
+      onChange?.();
+    } catch (e: any) {
+      setCardErr(e?.message ?? "Failed to save card");
+    } finally {
+      setSavingCard(false);
+    }
   }
 
   useEffect(() => {
@@ -81,6 +122,16 @@ export function CardDetailDrawer({
       .catch(() => alive && setOverview(null))
       .finally(() => alive && setLoading(false));
     if (accounts.length && !paySource) setPaySource(accounts[0].id);
+    setEditingCard(false);
+    setCardErr(null);
+    setCardDraft({
+      name: cardName ?? "",
+      bank: cardBank ?? "",
+      last4: cardLast4 ?? "",
+      due_day: cardClosingDay ?? 1,
+      credit_limit: cardCreditLimit ?? 0,
+      due_date_offset: cardDueOffset ?? 20,
+    });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardId]);
@@ -148,6 +199,15 @@ export function CardDetailDrawer({
     }
   }
 
+  // Scroll the pay panel into view whenever the user picks a statement to
+  // pay — the panel renders below the statements list and was easy to miss
+  // on long pages, making "Pay this statement" feel unresponsive.
+  useEffect(() => {
+    if (payCycleId && payPanelRef.current) {
+      payPanelRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [payCycleId]);
+
   function buildUpiLink(amount: number): string | null {
     const src = accounts.find(a => a.id === paySource);
     if (!src) return null;
@@ -185,14 +245,115 @@ export function CardDetailDrawer({
               <div className="text-[11px] text-zinc-500">{cardBank}</div>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/70"
-            aria-label="Close"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setEditingCard(v => !v)}
+              className={cn(
+                "p-1.5 rounded-md text-zinc-500 hover:text-violet-300 hover:bg-zinc-800/70",
+                editingCard && "text-violet-300 bg-zinc-800/70",
+              )}
+              aria-label="Edit card details"
+              title="Edit card details"
+            >
+              <Pencil size={14} />
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/70"
+              aria-label="Close"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
+
+        {editingCard && (
+          <div className="px-5 pt-4 pb-1">
+            <div className="rounded-2xl bg-zinc-900 border border-violet-500/30 p-4 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold uppercase tracking-wider text-violet-300 flex items-center gap-2">
+                  <Pencil size={12} /> Edit card
+                </div>
+                <button
+                  onClick={() => { setEditingCard(false); setCardErr(null); }}
+                  className="text-[11px] text-zinc-500 hover:text-zinc-300"
+                >
+                  cancel
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Name</span>
+                  <input
+                    className="bg-zinc-950 border border-zinc-700/70 rounded px-2.5 py-1.5 text-sm text-zinc-100"
+                    value={cardDraft.name}
+                    onChange={e => setCardDraft({ ...cardDraft, name: e.target.value })}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Bank</span>
+                  <input
+                    className="bg-zinc-950 border border-zinc-700/70 rounded px-2.5 py-1.5 text-sm text-zinc-100"
+                    value={cardDraft.bank}
+                    onChange={e => setCardDraft({ ...cardDraft, bank: e.target.value })}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Last 4</span>
+                  <input
+                    className="bg-zinc-950 border border-zinc-700/70 rounded px-2.5 py-1.5 text-sm text-zinc-100 num"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={cardDraft.last4}
+                    onChange={e => setCardDraft({ ...cardDraft, last4: e.target.value.replace(/\D/g, "").slice(0, 4) })}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Closing day</span>
+                  <input
+                    type="number" min={1} max={31}
+                    className="bg-zinc-950 border border-zinc-700/70 rounded px-2.5 py-1.5 text-sm text-zinc-100 num"
+                    value={String(cardDraft.due_day)}
+                    onChange={e => setCardDraft({ ...cardDraft, due_day: Number(e.target.value) })}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Days till due</span>
+                  <input
+                    type="number" min={0} max={45}
+                    className="bg-zinc-950 border border-zinc-700/70 rounded px-2.5 py-1.5 text-sm text-zinc-100 num"
+                    value={String(cardDraft.due_date_offset)}
+                    onChange={e => setCardDraft({ ...cardDraft, due_date_offset: Number(e.target.value) })}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Credit limit (₹)</span>
+                  <input
+                    type="number" min={0}
+                    className="bg-zinc-950 border border-zinc-700/70 rounded px-2.5 py-1.5 text-sm text-zinc-100 num"
+                    value={String(cardDraft.credit_limit)}
+                    onChange={e => setCardDraft({ ...cardDraft, credit_limit: Number(e.target.value) })}
+                  />
+                </label>
+              </div>
+              {cardErr && (
+                <div className="text-xs text-red-400 flex items-center gap-1.5">
+                  <AlertTriangle size={12} /> {cardErr}
+                </div>
+              )}
+              <div className="flex items-center gap-2 justify-end">
+                <button
+                  onClick={saveCard}
+                  disabled={savingCard || !cardDraft.name.trim()}
+                  className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold disabled:opacity-50 inline-flex items-center gap-1.5"
+                >
+                  {savingCard ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {loading && !overview ? (
           <div className="p-12 flex items-center justify-center">
@@ -268,7 +429,7 @@ export function CardDetailDrawer({
               const amt = Number(payAmount) || 0;
               const upi = buildUpiLink(amt);
               return (
-                <div className="rounded-2xl bg-zinc-900 border border-violet-500/30 p-5 flex flex-col gap-3">
+                <div ref={payPanelRef} className="rounded-2xl bg-zinc-900 border border-violet-500/30 p-5 flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <div className="text-xs font-semibold uppercase tracking-wider text-violet-300 flex items-center gap-2">
                       <ArrowDownToLine size={12} /> Pay statement
@@ -413,6 +574,23 @@ function StatementRow({
     } catch (err) { alert((err as Error).message); }
     finally { setSaving(false); }
   }
+
+  // Mark-paid flips total_paid to total_billed without creating a ledger
+  // entry — for users who reconcile their CC offline and just want the
+  // statement to stop showing as owed. Toggle off restores total_paid to 0.
+  async function toggleMarkPaid() {
+    if (saving) return;
+    const billed = Number(stmt.total_billed ?? 0);
+    const isFullyPaid = balance <= 0 && billed > 0;
+    setSaving(true);
+    try {
+      await api.updateBillingCycle(stmt.id, {
+        total_paid: isFullyPaid ? 0 : billed,
+      });
+      await onEdited?.();
+    } catch (err) { alert((err as Error).message); }
+    finally { setSaving(false); }
+  }
   const dueTone =
     status === "overdue" ? "text-red-400" :
     due !== null && due <= 3 ? "text-amber-400" :
@@ -463,6 +641,21 @@ function StatementRow({
                 className="inline-flex items-center gap-1.5 text-xs text-violet-300 hover:text-violet-200"
               >
                 <ArrowDownToLine size={12} /> Pay this statement
+              </button>
+            )}
+            {!editing && Number(stmt.total_billed ?? 0) > 0 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); toggleMarkPaid(); }}
+                disabled={saving}
+                className={cn(
+                  "inline-flex items-center gap-1.5 text-xs disabled:opacity-50",
+                  balance <= 0
+                    ? "text-emerald-400 hover:text-emerald-300"
+                    : "text-emerald-300/80 hover:text-emerald-200",
+                )}
+                title={balance <= 0 ? "Undo: marks balance as owed again" : "Sets total paid = total billed (no ledger entry)"}
+              >
+                <Check size={12} /> {balance <= 0 ? "Unmark paid" : "Mark paid"}
               </button>
             )}
             {!editing && (

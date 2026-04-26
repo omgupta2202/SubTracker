@@ -77,7 +77,10 @@ export function Dashboard() {
     window.addEventListener("subtracker:shortcut", onShortcut);
     return () => window.removeEventListener("subtracker:shortcut", onShortcut);
   }, []);
-  const [activeCard, setActiveCard] = useState<{ id: string; name: string; last4: string | null; bank: string | null } | null>(null);
+  const [activeCard, setActiveCard] = useState<{
+    id: string; name: string; last4: string | null; bank: string | null;
+    closingDay?: number | null; creditLimit?: number | null; dueOffset?: number | null;
+  } | null>(null);
   const [filters, setFilters] = useState<DashboardFilters>(loadFilters);
   const [attentionOpen, setAttentionOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -162,12 +165,18 @@ export function Dashboard() {
             rentDueDay={rent.due_day}
             onRefetch={refetchAll}
             onHide={() => hide("net-worth")}
-            onOpenCard={(c) => setActiveCard({
-              id: c.id,
-              name: c.name,
-              last4: c.last4 ?? null,
-              bank: (c as any).bank ?? null,
-            })}
+            onOpenCard={(c) => {
+              const full = cards.find(x => x.id === c.id);
+              setActiveCard({
+                id: c.id,
+                name: c.name,
+                last4: c.last4 ?? null,
+                bank: (c as any).bank ?? full?.bank ?? null,
+                closingDay: full?.due_day ?? null,
+                creditLimit: full?.credit_limit ?? null,
+                dueOffset: full?.due_date_offset ?? null,
+              });
+            }}
           />
         );
       case "cash-flow":
@@ -358,6 +367,9 @@ export function Dashboard() {
                 name:  (meta as any)?.name ?? fallback?.name ?? title,
                 last4: (meta as any)?.last4 ?? fallback?.last4 ?? null,
                 bank:  (meta as any)?.bank  ?? (fallback as any)?.bank ?? null,
+                closingDay:  fallback?.due_day ?? null,
+                creditLimit: fallback?.credit_limit ?? null,
+                dueOffset:   fallback?.due_date_offset ?? null,
               });
               // Flash the Net Worth card behind the drawer so the user can
               // see context if they close the drawer right away.
@@ -479,6 +491,9 @@ export function Dashboard() {
         cardName={activeCard?.name ?? null}
         cardLast4={activeCard?.last4 ?? null}
         cardBank={activeCard?.bank ?? null}
+        cardClosingDay={activeCard?.closingDay ?? null}
+        cardCreditLimit={activeCard?.creditLimit ?? null}
+        cardDueOffset={activeCard?.dueOffset ?? null}
         accounts={accounts}
         onClose={() => setActiveCard(null)}
         onChange={refetchAll}
