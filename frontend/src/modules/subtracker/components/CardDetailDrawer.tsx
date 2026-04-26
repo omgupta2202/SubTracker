@@ -63,6 +63,15 @@ export function CardDetailDrawer({
   const [payCycleId, setPayCycleId] = useState<string | null>(null);
   const [paySource, setPaySource] = useState<string>("");
 
+  // Re-fetchable so inline edits / pays on a single statement can refresh
+  // the whole drawer without a parent dashboard refetch (still done via
+  // onChange; this just keeps the drawer's data fresh too).
+  async function refreshOverview() {
+    if (!cardId) return;
+    const fresh = await api.getBillingCycleOverview(cardId);
+    setOverview(fresh);
+  }
+
   useEffect(() => {
     if (!cardId) { setOverview(null); return; }
     let alive = true;
@@ -128,11 +137,7 @@ export function CardDetailDrawer({
         amount,
         source_account_id: paySource,
       });
-      // Refetch overview
-      if (cardId) {
-        const fresh = await api.getBillingCycleOverview(cardId);
-        setOverview(fresh);
-      }
+      await refreshOverview();
       setPayCycleId(null);
       setPayAmount("");
       onChange?.();
@@ -247,6 +252,7 @@ export function CardDetailDrawer({
                         setPayCycleId(stmt.id);
                         setPayAmount(String(Math.round(Number(stmt.balance_due ?? (stmt.total_billed - stmt.total_paid)))));
                       }}
+                      onEdited={async () => { await refreshOverview?.(); onChange?.(); }}
                     />
                   ))}
                 </div>
@@ -352,17 +358,61 @@ export function CardDetailDrawer({
 }
 
 function StatementRow({
-  stmt, isOpen, onToggle, entries, onPay,
+  stmt, isOpen, onToggle, entries, onPay, onEdited,
 }: {
   stmt: BillingCycle;
   isOpen: boolean;
   onToggle: () => void;
   entries: AccountLedgerEntry[] | undefined;
   onPay: () => void;
+  /** Refetch the parent's overview after a successful inline edit. */
+  onEdited?: () => void | Promise<void>;
 }) {
+  const [editing, setEditing] = useState(false);
+  // Only billed + paid are editable here. Statement/due dates stay
+  // backend-managed (cycle_start/end are derived from statement_date),
+  // and min-due isn't usually a number people retype.
+  const [draft, setDraft] = useState(() => ({
+    total_billed: String(stmt.total_billed ?? 0),
+    total_paid:   String(stmt.total_paid ?? 0),
+  }));
+  const [saving, setSaving] = useState(false);
   const status = computeStatus(stmt);
   const balance = Number(stmt.balance_due ?? (stmt.total_billed - stmt.total_paid));
   const due = stmt.due_date ? daysFrom(stmt.due_date) : null;
+
+  async function save() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const payload: Record<string, any> = {};
+      // Only send fields the user actually changed — avoids the backend's
+      // "no editable fields" 400 on a no-op submit.
+      if (Number(draft.total_billed) !== Number(stmt.total_billed)) payload.total_billed = Number(draft.total_billed);
+      if (Number(draft.total_paid)   !== Number(stmt.total_paid))   payload.total_paid   = Number(draft.total_paid);
+      if (Object.keys(payload).length === 0) {
+        setEditing(false);
+        return;
+      }
+      await api.updateBillingCycle(stmt.id, payload);
+      setEditing(false);
+      await onEdited?.();
+    } catch (err) {
+      alert((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function destroy() {
+    if (!confirm("Delete this statement? Transactions stay in the ledger but the cycle will be unbilled.")) return;
+    setSaving(true);
+    try {
+      await api.deleteBillingCycle(stmt.id);
+      await onEdited?.();
+    } catch (err) { alert((err as Error).message); }
+    finally { setSaving(false); }
+  }
   const dueTone =
     status === "overdue" ? "text-red-400" :
     due !== null && due <= 3 ? "text-amber-400" :
@@ -404,14 +454,75 @@ function StatementRow({
 
       {isOpen && (
         <div className="px-2 pb-3 pl-4 ml-2 border-l border-zinc-800/80 flex flex-col gap-2">
-          {/* Pay action — only for statements with money owed */}
-          {balance > 0 && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onPay(); }}
-              className="self-start inline-flex items-center gap-1.5 text-xs text-violet-300 hover:text-violet-200"
-            >
-              <ArrowDownToLine size={12} /> Pay this statement
-            </button>
+          {/* Action row — Pay (when owed) + Edit + Delete. Each is a small
+              text button so the panel doesn't grow tall on read. */}
+          <div className="flex items-center gap-3 flex-wrap">
+            {balance > 0 && !editing && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onPay(); }}
+                className="inline-flex items-center gap-1.5 text-xs text-violet-300 hover:text-violet-200"
+              >
+                <ArrowDownToLine size={12} /> Pay this statement
+              </button>
+            )}
+            {!editing && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+                className="inline-flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200"
+              >
+                Edit
+              </button>
+            )}
+            {!editing && (
+              <button
+                onClick={(e) => { e.stopPropagation(); destroy(); }}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 text-xs text-red-400/80 hover:text-red-300 disabled:opacity-50"
+              >
+                Delete
+              </button>
+            )}
+          </div>
+
+          {/* Edit form — only billed + paid are exposed. Backend keeps
+              statement_date / due_date / cycle_start / cycle_end coherent
+              by deriving them; min_due is rarely a number users retype. */}
+          {editing && (
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 grid grid-cols-2 gap-3 text-xs">
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] uppercase tracking-wider text-zinc-500">Total billed (₹)</span>
+                <input type="number" inputMode="decimal" autoFocus
+                  className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-100 num"
+                  value={draft.total_billed}
+                  onChange={e => setDraft(d => ({ ...d, total_billed: e.target.value }))} />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] uppercase tracking-wider text-zinc-500">Total paid (₹)</span>
+                <input type="number" inputMode="decimal"
+                  className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-100 num"
+                  value={draft.total_paid}
+                  onChange={e => setDraft(d => ({ ...d, total_paid: e.target.value }))} />
+              </label>
+              <div className="col-span-2 flex items-center justify-end gap-2 mt-1">
+                <button
+                  onClick={() => {
+                    setEditing(false);
+                    setDraft({
+                      total_billed: String(stmt.total_billed ?? 0),
+                      total_paid:   String(stmt.total_paid ?? 0),
+                    });
+                  }}
+                  className="px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200">
+                  Cancel
+                </button>
+                <button
+                  onClick={save}
+                  disabled={saving}
+                  className="px-3 py-1 rounded bg-violet-600 hover:bg-violet-500 text-white font-medium disabled:opacity-50">
+                  {saving ? "Saving…" : "Save"}
+                </button>
+              </div>
+            </div>
           )}
 
           {/* Transactions */}

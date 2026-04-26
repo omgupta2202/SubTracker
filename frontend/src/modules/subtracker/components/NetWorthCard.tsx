@@ -54,7 +54,10 @@ const dot = (b?: string) => BANK_DOT[b ?? ""] ?? "bg-zinc-500";
 
 export function NetWorthCard({ accounts, cards, rent = 0, rentDueDay, onRefetch, onHide, onOpenCard }: Props) {
   const [editing, setEditing] = useState(false);
-  const [showCards, setShowCards] = useState(false);
+  // Default expanded when there's at least one credit card or non-trivial
+  // bank account — the breakdown (last statement / unbilled / per-card
+  // totals) is the whole point of this card. Hide-button still works.
+  const [showCards, setShowCards] = useState(() => cards.length > 0 || accounts.length > 1);
   const [rentEditing, setRentEditing] = useState(false);
   const [rentDraft, setRentDraft] = useState({ amount: rent, due_day: rentDueDay ?? 1 });
   const [rentSaving, setRentSaving] = useState(false);
@@ -77,9 +80,13 @@ export function NetWorthCard({ accounts, cards, rent = 0, rentDueDay, onRefetch,
     }
   }
 
-  const totalLiquid = accounts.reduce((s, a) => s + a.balance, 0);
-  const totalCC     = cards.reduce((s, c) => s + c.outstanding, 0);
-  const netAfterCC  = totalLiquid - totalCC - rent;
+  const totalLiquid    = accounts.reduce((s, a) => s + a.balance, 0);
+  const totalCC        = cards.reduce((s, c) => s + c.outstanding, 0);
+  // Aggregate breakdown across all cards for the collapsed CC summary row
+  // — so users see "Last stmt + Unbilled" without having to expand the list.
+  const totalUnbilled  = cards.reduce((s, c) => s + (c.unbilled ?? 0), 0);
+  const totalLastStmt  = cards.reduce((s, c) => s + (c.last_statement ?? 0), 0);
+  const netAfterCC     = totalLiquid - totalCC - rent;
 
   const { logs } = useDailyLogs(30);
   const sparkData = useMemo(
@@ -129,8 +136,34 @@ export function NetWorthCard({ accounts, cards, rent = 0, rentDueDay, onRefetch,
       <div className="flex flex-col">
         <Row label="Liquid"       value={inrCompact(totalLiquid)} dot="bg-emerald-400"
              helper={`${accounts.length} acct${accounts.length === 1 ? "" : "s"}`} />
-        <Row label="Credit cards" value={`− ${inrCompact(totalCC)}`} valueClassName="text-red-400"
-             dot="bg-red-500" helper={`${cards.length} card${cards.length === 1 ? "" : "s"}`} />
+        {/* Collapsed CC summary — two lines so the breakdown is visible
+            without having to expand the per-card list. */}
+        <div className="flex items-start gap-3 py-1.5">
+          <span className="h-2 w-2 mt-2 rounded-full bg-red-500 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm text-zinc-300">
+                Credit cards
+                <span className="text-xs text-zinc-500 ml-1.5">{cards.length} card{cards.length === 1 ? "" : "s"}</span>
+              </span>
+              <span className="num text-sm tabular-nums text-red-400">− {inrCompact(totalCC)}</span>
+            </div>
+            {(totalLastStmt > 0 || totalUnbilled > 0) && (
+              <div className="text-[11px] text-zinc-500 num mt-0.5 flex items-center gap-3">
+                {totalLastStmt > 0 && (
+                  <span title="Sum across cards: last issued statements still pending payment">
+                    Last stmt <span className="text-zinc-300">{inrCompact(totalLastStmt)}</span>
+                  </span>
+                )}
+                {totalUnbilled > 0 && (
+                  <span title="Sum across cards: spend on the current cycles, statements not issued yet">
+                    Unbilled <span className="text-zinc-300">{inrCompact(totalUnbilled)}</span>
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
         {/* Rent row — inline editable when global edit mode is on, or via row-level edit */}
         {editing ? (
           rentEditing ? (

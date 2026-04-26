@@ -84,6 +84,8 @@ def resolve_cycle_for_date(
             raise ValueError("Cannot assign transaction to a closed statement cycle")
         return cycle
 
+    today = date.today()
+
     existing = fetchone(
         """
         SELECT * FROM billing_cycles
@@ -95,7 +97,32 @@ def resolve_cycle_for_date(
         (account_id, user_id, txn_date, txn_date),
     )
     if existing:
-        return existing
+        # Backfilled past spend stays on its natural cycle (closed or open).
+        # Current/future spend that lands on an OPEN cycle also stays there.
+        if txn_date < today or not existing["is_closed"]:
+            return existing
+        # Current/future txn fell on a closed cycle — typically because
+        # auto_rollover just closed today's statement. Route it to the
+        # next-open cycle (the "unbilled bucket"), creating one if needed.
+        open_next = fetchone(
+            """
+            SELECT * FROM billing_cycles
+            WHERE account_id=%s AND user_id=%s AND deleted_at IS NULL
+              AND is_closed=FALSE AND statement_date > %s
+            ORDER BY statement_date ASC
+            LIMIT 1
+            """,
+            (account_id, user_id, existing["statement_date"]),
+        )
+        if open_next:
+            return open_next
+        return _ensure_next_open_cycle(
+            account_id=account_id,
+            user_id=user_id,
+            as_of=today,
+            closing_day=int(acc["billing_cycle_day"] or 1),
+            due_offset_days=int(acc["due_offset_days"] or 20),
+        )
 
     cycle = _create_cycle_for_txn_date(
         account_id=account_id,
@@ -109,16 +136,18 @@ def resolve_cycle_for_date(
 
 def auto_rollover(account_id: str, user_id: str, as_of: Optional[date] = None):
     """
-    Make a card's billing cycles consistent with reality:
-      1. Backfill any past statement dates that should have closed but
-         have no cycle row at all (e.g. a card created today gets the
-         last 6 months of historical statements created as zero-billed
-         closed cycles).
-      2. Close any cycles whose statement_date is in the past but are
-         still flagged is_closed=FALSE.
+    Reconcile a card's billing cycles with the calendar:
+
+      1. Backfill any past statement dates that have no cycle row at all.
+      2. Close every cycle whose statement_date is on-or-before today
+         (the bill is "generated" on the statement date — strictly-less-than
+         left today's cycle dangling open, which is wrong).
       3. Recalculate totals on each closed cycle from its linked ledger
          entries.
-      4. Ensure exactly one open cycle exists for today.
+      4. Ensure exactly ONE open cycle exists, and its statement_date is
+         the next closing day strictly AFTER today. All current spend
+         lands on this "unbilled" bucket; once that closing day passes,
+         step 2 will close it and step 4 will mint the next one.
     """
     target = as_of or date.today()
 
@@ -146,7 +175,9 @@ def auto_rollover(account_id: str, user_id: str, as_of: Optional[date] = None):
         due_offset_days=due_offset_days,
     )
 
-    # 2 + 3. Close past-due-but-still-open cycles and recompute totals.
+    # 2 + 3. Close cycles whose statement_date has arrived (<=) and recompute
+    # totals. <= is correct: a statement is generated AT close-of-business
+    # on its statement_date — by the next request, that month is "billed".
     rows = fetchall(
         """
         SELECT id, statement_date, is_closed
@@ -158,7 +189,7 @@ def auto_rollover(account_id: str, user_id: str, as_of: Optional[date] = None):
     )
     for r in rows:
         stmt_date = _to_date(r["statement_date"])
-        if not r["is_closed"] and stmt_date < target:
+        if not r["is_closed"] and stmt_date <= target:
             execute_void(
                 """
                 UPDATE billing_cycles
@@ -167,10 +198,73 @@ def auto_rollover(account_id: str, user_id: str, as_of: Optional[date] = None):
                 """,
                 (r["id"],),
             )
+        if stmt_date <= target:
             recalculate_cycle_totals(r["id"], user_id)
 
-    # 4. Ensure exactly one open cycle covers today.
-    resolve_cycle_for_date(account_id=account_id, user_id=user_id, txn_date=target)
+    # 4. Ensure the SINGLE open cycle exists for next month's statement.
+    _ensure_next_open_cycle(
+        account_id=account_id,
+        user_id=user_id,
+        as_of=target,
+        closing_day=closing_day,
+        due_offset_days=due_offset_days,
+    )
+
+
+def _next_open_statement_date(after: date, closing_day: int) -> date:
+    """The closing day STRICTLY after `after`. If today is the closing
+    day, returns next month's closing day — today's statement has just
+    been generated; the next bucket is next month."""
+    cd = max(1, min(31, closing_day))
+    this_close = _date_with_day(after.year, after.month, cd)
+    if after < this_close:
+        return this_close
+    ny, nm = _next_month(after.year, after.month)
+    return _date_with_day(ny, nm, cd)
+
+
+def _ensure_next_open_cycle(
+    *,
+    account_id: str,
+    user_id: str,
+    as_of: date,
+    closing_day: int,
+    due_offset_days: int,
+) -> dict:
+    """Make sure the unbilled bucket for current spend exists, and is
+    open. Idempotent. The returned cycle is the one with statement_date
+    strictly after `as_of`."""
+    next_stmt   = _next_open_statement_date(as_of, closing_day)
+    prev_stmt   = _statement_date_for_txn(next_stmt - timedelta(days=1), closing_day)
+    cycle_start = prev_stmt + timedelta(days=1)
+    cycle_end   = next_stmt
+    due_date    = next_stmt + timedelta(days=due_offset_days)
+
+    cycle = execute(
+        """
+        INSERT INTO billing_cycles
+          (account_id, user_id, cycle_start, cycle_end, statement_date, due_date,
+           total_billed, minimum_due, source, is_closed)
+        VALUES (%s,%s,%s,%s,%s,%s, 0, 0, 'system', FALSE)
+        ON CONFLICT (account_id, statement_date) DO UPDATE
+          SET updated_at = NOW()
+        RETURNING *
+        """,
+        (account_id, user_id, cycle_start, cycle_end, next_stmt, due_date),
+    )
+    # Defensive: if the row already existed and was somehow closed
+    # (should never happen but the check is one query), reopen it.
+    if cycle and cycle.get("is_closed"):
+        execute_void(
+            """
+            UPDATE billing_cycles
+            SET is_closed=FALSE, closed_at=NULL, updated_at=NOW()
+            WHERE id=%s
+            """,
+            (cycle["id"],),
+        )
+        cycle["is_closed"] = False
+    return cycle
 
 
 # How far back do we backfill on first-touch? 12 months keeps the UI
