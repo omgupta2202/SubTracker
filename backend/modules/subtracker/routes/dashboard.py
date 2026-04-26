@@ -263,7 +263,10 @@ def summary():
     )
     total_liquid = sum(Decimal(str(acc["balance"])) for acc in liquid_accounts) if liquid_accounts else Decimal("0")
 
-    # Credit card outstanding/minimum due (single aggregate query)
+    # Credit card breakdown — surface unbilled (current open cycle) and
+    # last_statement (most recent closed cycle still pending payment) so
+    # the dashboard NetWorthCard can show "Last stmt ₹X · Unbilled ₹Y"
+    # instead of a single opaque outstanding total.
     cc_accounts = fetchall(
         """
         SELECT
@@ -274,7 +277,7 @@ def summary():
           ext.credit_limit,
           COALESCE(SUM(
             CASE WHEN bc.is_closed=FALSE THEN bc.balance_due ELSE 0 END
-          ), 0) AS outstanding,
+          ), 0) AS unbilled,
           COALESCE(SUM(
             CASE WHEN bc.is_closed=FALSE THEN bc.minimum_due ELSE 0 END
           ), 0) AS minimum_due
@@ -295,18 +298,39 @@ def summary():
     total_cc_limit       = Decimal("0")
     cards_summary = []
     for cc in cc_accounts:
-        outstanding = Decimal(str(cc.get("outstanding") or 0))
-        minimum     = Decimal(str(cc.get("minimum_due") or 0))
+        unbilled = Decimal(str(cc.get("unbilled") or 0))
+        minimum  = Decimal(str(cc.get("minimum_due") or 0))
+        # Most recent closed cycle whose balance hasn't been fully paid —
+        # this is what the user sees on their bank statement and needs
+        # to pay to avoid interest. We do this per-card (extra ~one query
+        # per CC; users typically have <5 cards so the cost is fine).
+        last_stmt_row = fetchone(
+            """
+            SELECT balance_due, due_date, statement_date
+            FROM billing_cycles
+            WHERE account_id=%s AND is_closed=TRUE AND deleted_at IS NULL
+              AND balance_due > 0
+            ORDER BY statement_date DESC
+            LIMIT 1
+            """,
+            (cc["id"],),
+        )
+        last_stmt = Decimal(str((last_stmt_row or {}).get("balance_due") or 0))
+        outstanding = unbilled + last_stmt
         total_cc_outstanding += outstanding
         total_cc_minimum     += minimum
         if cc.get("credit_limit"):
             total_cc_limit += Decimal(str(cc["credit_limit"]))
         cards_summary.append({
-            "id": cc["id"],
-            "name": cc["name"],
-            "last4": cc.get("last4"),
-            "outstanding": float(outstanding),
-            "minimum_due": float(minimum),
+            "id":                       cc["id"],
+            "name":                     cc["name"],
+            "last4":                    cc.get("last4"),
+            "outstanding":              float(outstanding),
+            "unbilled":                 float(unbilled),
+            "last_statement":           float(last_stmt),
+            "last_statement_due_date":  (last_stmt_row or {}).get("due_date").isoformat() if last_stmt_row and last_stmt_row.get("due_date") else None,
+            "last_statement_date":      (last_stmt_row or {}).get("statement_date").isoformat() if last_stmt_row and last_stmt_row.get("statement_date") else None,
+            "minimum_due":              float(minimum),
         })
 
     # Monthly burn — three numbers, no silent picking:

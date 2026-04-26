@@ -22,12 +22,48 @@ bp = Blueprint("obligations", __name__, url_prefix="/api/obligations")
 
 @bp.get("/")
 def list_obligations():
+    # Best-effort: ensure occurrence rows exist for active obligations
+    # before returning the list. Without this, freshly-created
+    # obligations show "no upcoming due" until the daily cron fires —
+    # confusing for new users.
+    try:
+        obligation_service.ensure_occurrences_for_user(g.user_id, days_ahead=60)
+    except Exception:
+        pass
     rows = obligation_service.list_obligations(
         user_id=g.user_id,
         type=request.args.get("type"),
         status=request.args.get("status", "active"),
     )
     return ok(rows)
+
+
+@bp.post("/occurrences/<occurrence_id>/pay")
+def mark_paid(occurrence_id):
+    """Quick "I paid this" — supports partial payments by passing
+    `amount_paid`. Without that field we mark the full amount as paid.
+    Doesn't post to the ledger (use /payments for that)."""
+    body = request.get_json(silent=True) or {}
+    try:
+        row = obligation_service.mark_occurrence_paid(
+            occurrence_id, g.user_id,
+            amount_paid=body.get("amount_paid"),
+            note=body.get("note"),
+        )
+    except ObligationError as e:
+        return err(str(e), e.status)
+    if not row:
+        return err("Occurrence not found", 404)
+    return ok(row)
+
+
+@bp.post("/occurrences/<occurrence_id>/unpay")
+def unmark_paid(occurrence_id):
+    """Undo a manual mark — resets amount_paid to 0, status to upcoming."""
+    row = obligation_service.unmark_occurrence_paid(occurrence_id, g.user_id)
+    if not row:
+        return err("Occurrence not found", 404)
+    return ok(row)
 
 
 @bp.get("/upcoming")

@@ -192,6 +192,22 @@ export const updateCapex = (id: string, d: Partial<Omit<CapExItem, "id">>) =>
   request<CapExItem>(`/capex/${id}`, { method: "PUT", body: JSON.stringify(d) });
 export const deleteCapex = (id: string) =>
   request<{ deleted: string }>(`/capex/${id}`, { method: "DELETE" });
+export const purchaseCapex = (id: string, d?: { amount_spent?: number; purchased_at?: string; funding_account_id?: string }) =>
+  request<CapExItem>(`/capex/${id}/purchase`, { method: "POST", body: JSON.stringify(d ?? {}) });
+export const unpurchaseCapex = (id: string) =>
+  request<CapExItem>(`/capex/${id}/unpurchase`, { method: "POST" });
+
+// ── Obligation occurrences (lightweight pay/unpay) ─────────────────────────
+export const payObligationOccurrence = (occurrenceId: string, d?: { amount_paid?: number; note?: string }) =>
+  request<{ id: string; status: string; amount_paid: number; amount_due: number }>(
+    `/obligations/occurrences/${occurrenceId}/pay`,
+    { method: "POST", body: JSON.stringify(d ?? {}) },
+  );
+export const unpayObligationOccurrence = (occurrenceId: string) =>
+  request<{ id: string; status: string; amount_paid: number }>(
+    `/obligations/occurrences/${occurrenceId}/unpay`,
+    { method: "POST" },
+  );
 
 // ── Rent ───────────────────────────────────────────────────────────────────
 export const getRent = () => request<Rent>("/rent");

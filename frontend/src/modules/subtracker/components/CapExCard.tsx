@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { CapExItem } from "@/modules/subtracker/types";
-import { Target, ChevronDown, ChevronUp, Pencil } from "lucide-react";
+import { Target, ChevronDown, ChevronUp, Pencil, ShoppingBag, RotateCcw } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardAction } from "@/components/ui/Card";
 import { Stat, Row } from "@/components/ui/Stat";
 import { EditList, Field, FieldGrid, inputCls } from "@/components/ui/EditList";
@@ -26,13 +26,19 @@ const dotFor = (c: string) => CATEGORY_DOT[c] ?? "bg-zinc-500";
 export function CapExCard({ items, availableAfterCC, onRefetch, onHide }: Props) {
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [showPurchased, setShowPurchased] = useState(false);
 
-  const total = items.reduce((s, i) => s + i.amount, 0);
+  // Active = not yet bought. Purchased rows have their own toggleable
+  // section so the "what do I still owe myself?" total stays clean.
+  const active    = items.filter(i => i.status !== "purchased");
+  const purchased = items.filter(i => i.status === "purchased");
+
+  const total = active.reduce((s, i) => s + i.amount, 0);
   const gap   = availableAfterCC - total;
   const haveAvail = Math.max(availableAfterCC, 0);
   const fundedPct = total > 0 ? Math.min((haveAvail / total) * 100, 100) : 0;
 
-  const grouped = items.reduce<Record<string, CapExItem[]>>((acc, item) => {
+  const grouped = active.reduce<Record<string, CapExItem[]>>((acc, item) => {
     (acc[item.category] ??= []).push(item);
     return acc;
   }, {});
@@ -74,7 +80,7 @@ export function CapExCard({ items, availableAfterCC, onRefetch, onHide }: Props)
           items={items}
           getKey={x => x.id}
           addLabel="Add capex"
-          emptyDraft={() => ({ name: "", amount: 0, category: "Other" })}
+          emptyDraft={() => ({ name: "", amount: 0, category: "Other", target_date: null })}
           onSave={async (draft, original) => {
             if (original) await api.updateCapex(original.id, draft as any);
             else          await api.createCapex(draft as any);
@@ -87,6 +93,7 @@ export function CapExCard({ items, availableAfterCC, onRefetch, onHide }: Props)
                 <span className={cn("h-2 w-2 rounded-full shrink-0", dotFor(item.category))} />
                 <span>{item.name}</span>
                 <span className="text-[10px] text-zinc-600">{item.category}</span>
+                {dueChip(item.target_date)}
               </span>
             } value={inrCompact(item.amount)} />
           )}
@@ -110,6 +117,18 @@ export function CapExCard({ items, availableAfterCC, onRefetch, onHide }: Props)
                   </select>
                 </Field>
               </FieldGrid>
+              <Field label="Target date (optional)">
+                <input
+                  className={inputCls}
+                  type="date"
+                  title="When you'd like to buy this. Items due within 30 days bubble up in the dashboard pulse."
+                  value={d.target_date ?? ""}
+                  onChange={e => set({ ...d, target_date: e.target.value || null })}
+                />
+              </Field>
+              <Field label="Note (optional)">
+                <input className={inputCls} value={d.note ?? ""} onChange={e => set({ ...d, note: e.target.value })} />
+              </Field>
             </>
           )}
         />
@@ -134,7 +153,32 @@ export function CapExCard({ items, availableAfterCC, onRefetch, onHide }: Props)
                 {isOpen && (
                   <div className="ml-5 mt-0.5 mb-2 pl-2 border-l border-zinc-800 flex flex-col">
                     {catItems.map(item => (
-                      <Row key={item.id} label={item.name} value={inrCompact(item.amount)} />
+                      <div key={item.id} className="flex items-center gap-2 py-1">
+                        <span className="text-sm text-zinc-300 flex-1 truncate flex items-center gap-1.5">
+                          {item.name}
+                          {dueChip(item.target_date)}
+                        </span>
+                        <button
+                          onClick={async () => {
+                            const spent = window.prompt(
+                              `Mark "${item.name}" as purchased. How much did you actually spend?`,
+                              String(item.amount),
+                            );
+                            if (spent == null) return;
+                            const n = Number(spent);
+                            if (!Number.isFinite(n) || n < 0) { alert("Bad amount"); return; }
+                            try {
+                              await api.purchaseCapex(item.id, { amount_spent: n });
+                              onRefetch();
+                            } catch (err) { alert((err as Error).message); }
+                          }}
+                          title="Mark as purchased — keeps it in history with the actual amount you spent"
+                          className="px-2 py-0.5 rounded text-[11px] text-emerald-300 hover:bg-emerald-500/15 inline-flex items-center gap-1"
+                        >
+                          <ShoppingBag size={11} /> bought
+                        </button>
+                        <span className="num text-sm text-zinc-200 shrink-0 w-20 text-right">{inrCompact(item.amount)}</span>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -146,8 +190,71 @@ export function CapExCard({ items, availableAfterCC, onRefetch, onHide }: Props)
               Nothing planned. <button onClick={() => setEditing(true)} className="text-violet-400 hover:text-violet-300">Add one</button>
             </div>
           )}
+
+          {purchased.length > 0 && (
+            <div className="mt-2 border-t border-zinc-800 pt-2">
+              <button
+                onClick={() => setShowPurchased(s => !s)}
+                className="w-full flex items-center justify-between text-[11px] text-zinc-500 hover:text-zinc-300 px-1"
+              >
+                <span>Recently bought · {purchased.length}</span>
+                {showPurchased ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+              </button>
+              {showPurchased && (
+                <div className="mt-1 flex flex-col">
+                  {purchased.map(item => (
+                    <div key={item.id} className="flex items-center gap-2 py-1 text-[12.5px]">
+                      <span className="text-zinc-400 flex-1 truncate">
+                        {item.name}{" "}
+                        {item.purchased_at && (
+                          <span className="text-zinc-600 num">· {new Date(item.purchased_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</span>
+                        )}
+                      </span>
+                      <button
+                        onClick={async () => {
+                          if (!confirm(`Undo purchase of "${item.name}"? It'll move back to the planned list.`)) return;
+                          try {
+                            await api.unpurchaseCapex(item.id);
+                            onRefetch();
+                          } catch (err) { alert((err as Error).message); }
+                        }}
+                        title="Undo — moves back to planned"
+                        className="text-[11px] text-zinc-500 hover:text-zinc-200 inline-flex items-center gap-0.5"
+                      >
+                        <RotateCcw size={10} /> undo
+                      </button>
+                      <span className="num text-zinc-300 shrink-0 w-20 text-right">{inrCompact(item.amount_spent ?? item.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </Card>
+  );
+}
+
+/** Small chip rendered next to capex name when a target_date is set.
+ *  Red for overdue, amber for ≤7d, zinc otherwise. Hidden when null. */
+function dueChip(target_date?: string | null) {
+  if (!target_date) return null;
+  const d = new Date(target_date);
+  if (Number.isNaN(d.getTime())) return null;
+  const days = Math.ceil((d.getTime() - Date.now()) / 86_400_000);
+  const tone =
+    days < 0  ? "text-red-300 bg-red-500/10 border-red-500/30" :
+    days <= 7 ? "text-amber-300 bg-amber-500/10 border-amber-500/30" :
+                "text-zinc-400 bg-zinc-800/50 border-zinc-700";
+  const label =
+    days < 0  ? `overdue ${-days}d` :
+    days === 0 ? "today" :
+                 `${days}d`;
+  return (
+    <span className={cn("text-[10px] px-1.5 py-0.5 rounded border num", tone)}
+          title={`Target: ${d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`}>
+      {label}
+    </span>
   );
 }

@@ -101,10 +101,14 @@ def update(
         "total_installments", "completed_installments",
     }
     fields = {k: v for k, v in updates.items() if k in allowed}
-    lender = updates.get("lender")
-    if not fields:
-        if lender is None:
-            raise ObligationError("No valid update fields provided", 400)
+    # EMI extension fields (live in obligation_emi_ext, not on the parent
+    # row). All optional; create-or-update via UPSERT after the parent
+    # update succeeds.
+    ext_fields = {k: v for k, v in updates.items() if k in (
+        "lender", "principal", "interest_rate", "loan_account_no",
+    )}
+    if not fields and not ext_fields:
+        raise ObligationError("No valid update fields provided", 400)
 
     result = None
     if fields:
@@ -140,20 +144,32 @@ def update(
             (fields["amount"], obligation_id)
         )
 
-    if lender is not None:
+    if ext_fields:
+        # Upsert the EMI extension row. Build the column list dynamically
+        # so passing only `interest_rate` doesn't blank `lender`/etc.
+        cols = list(ext_fields.keys())
+        col_sql = ", ".join(cols)
+        placeholders = ", ".join(["%s"] * len(cols))
+        update_sql = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols)
         execute_void(
-            """
-            INSERT INTO obligation_emi_ext (obligation_id, lender)
-            VALUES (%s, %s)
-            ON CONFLICT (obligation_id) DO UPDATE SET lender = EXCLUDED.lender
+            f"""
+            INSERT INTO obligation_emi_ext (obligation_id, {col_sql})
+            VALUES (%s, {placeholders})
+            ON CONFLICT (obligation_id) DO UPDATE SET {update_sql}
             """,
-            (obligation_id, lender)
+            (obligation_id, *ext_fields.values()),
         )
 
     return get_by_id(obligation_id, user_id)
 
 
 def soft_delete(obligation_id: str, user_id: str) -> dict:
+    """Soft-delete an obligation AND cascade-cancel its future occurrences.
+
+    Past occurrences (paid, partial, missed) stay around for history.
+    Future `upcoming` occurrences would otherwise show up in the dashboard
+    as orphan dues — wipe those.
+    """
     result = execute(
         """
         UPDATE recurring_obligations
@@ -165,7 +181,72 @@ def soft_delete(obligation_id: str, user_id: str) -> dict:
     )
     if not result:
         raise ObligationError("Obligation not found", 404)
+    execute_void(
+        """
+        DELETE FROM obligation_occurrences
+        WHERE obligation_id=%s
+          AND status='upcoming'
+          AND due_date >= CURRENT_DATE
+        """,
+        (obligation_id,),
+    )
     return result
+
+
+def mark_occurrence_paid(
+    occurrence_id: str,
+    user_id: str,
+    amount_paid: Optional[float] = None,
+    note: Optional[str] = None,
+) -> dict:
+    """Lightweight "I paid this" — bumps `amount_paid` on an occurrence
+    without going through the full payments+ledger flow. Useful for
+    historical entries or for users who don't want to track the source
+    account.
+
+    `amount_paid` defaults to the occurrence's `amount_due` (a full
+    payment). Pass a smaller number for a partial payment — status flips
+    to 'partial' rather than 'paid' until paid >= due.
+    """
+    occ = fetchone(
+        """
+        SELECT id, amount_due, amount_paid, status
+        FROM obligation_occurrences
+        WHERE id=%s AND user_id=%s
+        """,
+        (occurrence_id, user_id),
+    )
+    if not occ:
+        raise ObligationError("Occurrence not found", 404)
+
+    new_paid = float(occ["amount_paid"] or 0) + float(amount_paid if amount_paid is not None else occ["amount_due"])
+    due = float(occ["amount_due"])
+    new_status = "paid" if new_paid + 0.005 >= due else "partial"
+
+    return execute(
+        """
+        UPDATE obligation_occurrences
+        SET amount_paid=%s,
+            status=%s,
+            updated_at=NOW()
+        WHERE id=%s AND user_id=%s
+        RETURNING *
+        """,
+        (new_paid, new_status, occurrence_id, user_id),
+    )
+
+
+def unmark_occurrence_paid(occurrence_id: str, user_id: str) -> dict:
+    """Undo a manual mark — resets to amount_paid=0, status='upcoming'."""
+    return execute(
+        """
+        UPDATE obligation_occurrences
+        SET amount_paid=0, status='upcoming', updated_at=NOW()
+        WHERE id=%s AND user_id=%s
+        RETURNING *
+        """,
+        (occurrence_id, user_id),
+    )
 
 
 # ── Queries ───────────────────────────────────────────────────────────────────
@@ -340,6 +421,25 @@ def generate_occurrences(obligation_id: str, user_id: str, days_ahead: int = 90)
         )
         occ_date = _compute_next_due(obl["frequency"], obl["due_day"], occ_date)
         count += 1
+
+
+def ensure_occurrences_for_user(user_id: str, days_ahead: int = 60) -> int:
+    """Walk every active obligation for one user and materialize upcoming
+    occurrence rows in [today, today+days_ahead]. Idempotent (each
+    individual call to `generate_occurrences` uses ON CONFLICT DO NOTHING).
+    Returns the count of obligations processed."""
+    obligations = fetchall(
+        "SELECT id FROM recurring_obligations WHERE user_id=%s AND status='active' AND deleted_at IS NULL",
+        (user_id,),
+    )
+    n = 0
+    for obl in obligations:
+        try:
+            generate_occurrences(obl["id"], user_id, days_ahead=days_ahead)
+            n += 1
+        except Exception:
+            pass
+    return n
 
 
 def generate_occurrences_all_users():

@@ -153,6 +153,10 @@ export function Dashboard() {
             cards={dashSummary?.credit_cards ?? cards.map(c => ({
               id: c.id, name: c.name, last4: c.last4,
               outstanding: c.outstanding, minimum_due: c.minimum_due,
+              unbilled: c.unbilled,
+              last_statement: c.last_statement,
+              last_statement_due_date: c.last_statement_due_date,
+              last_statement_date: c.last_statement_date,
             }))}
             rent={rent.amount}
             rentDueDay={rent.due_day}
@@ -185,6 +189,7 @@ export function Dashboard() {
             emis={emis}
             cards={cards}
             onHide={() => hide("seven-day")}
+            onPaid={refetchAll}
           />
         );
       case "monthly-burn":

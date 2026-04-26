@@ -68,8 +68,20 @@ export interface Receivable {
 export interface CapExItem {
   id: string;
   name: string;
+  /** Planned amount. */
   amount: number;
   category: string;
+  /** ISO date the user wants to buy this by. NULL = no specific deadline. */
+  target_date?: string | null;
+  /** Status walks: planned → in_progress → purchased (or → cancelled). */
+  status?: "planned" | "in_progress" | "purchased" | "cancelled";
+  /** Set when status flips to "purchased". */
+  purchased_at?: string | null;
+  /** Actual money spent (set on mark-purchased). May differ from planned amount. */
+  amount_spent?: number;
+  /** Account the purchase was funded from. */
+  funding_account_id?: string | null;
+  note?: string;
 }
 
 export interface AllocationItem {
@@ -207,7 +219,14 @@ export interface DashboardCreditCard {
   id: string;
   name: string;
   last4: string | null;
+  /** Total = unbilled + last_statement. */
   outstanding: number;
+  /** Current open cycle's balance_due (this month's spend, no statement yet). */
+  unbilled?: number;
+  /** Most recent CLOSED cycle's balance_due (issued + still pending). */
+  last_statement?: number;
+  last_statement_due_date?: string | null;
+  last_statement_date?: string | null;
   minimum_due: number;
 }
 
