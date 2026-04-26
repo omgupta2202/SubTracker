@@ -175,7 +175,15 @@ export const cancelTrackerInvite = (id: string, memberId: string) =>
 export const leaveTracker = (id: string) =>
   request<{ left: boolean }>(`/trackers/${id}/leave`, { method: "POST" });
 export const nudgeTrackerMember = (id: string, memberId: string, d?: { expense_id?: string; note?: string }) =>
-  request<{ sent: boolean; to: string; subject: string; error?: string }>(
+  request<{
+    sent: boolean;
+    to: string;
+    subject: string;
+    error?: string;
+    /** Daily rolling-24h cap — backend tunable via NUDGE_DAILY_LIMIT. */
+    daily_limit?: number;
+    used_today?: number;
+  }>(
     `/trackers/${id}/members/${memberId}/nudge`,
     { method: "POST", body: JSON.stringify(d ?? {}) },
   );

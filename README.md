@@ -68,6 +68,15 @@ Detail in [CLAUDE.md](CLAUDE.md#module-architecture).
 
 ## Environment
 
+Each project ships a tracked `.env.example` you can copy as a starting
+point — they document every var (required + optional) with comments:
+
+```bash
+cp backend/.env.example  backend/.env
+cp frontend/.env.example frontend/.env
+cp mobile/.env.example   mobile/.env.local   # Expo reads .env.local
+```
+
 ### `backend/.env`
 
 ```env

@@ -15,7 +15,7 @@ import {
 } from "@/lib/layoutStore";
 import {
   History, BellRing, SlidersHorizontal,
-  Plus, LogOut, Search, User as UserIcon, Mail,
+  Plus, LogOut, Search, User as UserIcon, Mail, Sparkles,
 } from "lucide-react";
 import { useAuth } from "@/modules/auth";
 import { useSubscriptions } from "@/hooks/useSubscriptions";
@@ -41,6 +41,7 @@ import { AppSwitcher } from "./AppSwitcher";
 import { DashboardPulse } from "./DashboardPulse";
 import { navigate } from "@/lib/router";
 import { SubTrackerIcon } from "@/lib/appIcons";
+import { Onboarding, useOnboarding, replayTour } from "./Onboarding";
 import { HistoryPanel } from "./HistoryPanel";
 import { DashboardFilterBar, loadFilters, isFilterActive } from "./DashboardFilterBar";
 import { AttentionSection } from "./AttentionSection";
@@ -62,6 +63,7 @@ export function Dashboard() {
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [tourOpen, dismissTour] = useOnboarding(user?.id);
   const [activeCard, setActiveCard] = useState<{ id: string; name: string; last4: string | null; bank: string | null } | null>(null);
   const [filters, setFilters] = useState<DashboardFilters>(loadFilters);
   const [attentionOpen, setAttentionOpen] = useState(false);
@@ -237,7 +239,7 @@ export function Dashboard() {
           </button>
 
           {/* Group 3 — actions, visually grouped with a left divider */}
-          <div className="flex items-center gap-0.5 ml-auto pl-3 border-l border-zinc-800/60">
+          <div data-tour="actions" className="flex items-center gap-0.5 ml-auto pl-3 border-l border-zinc-800/60">
             <IconBtn
               onClick={() => {
                 setAttentionOpen(v => !v);
@@ -268,11 +270,12 @@ export function Dashboard() {
               <History size={16} />
             </IconBtn>
 
-            <AppSwitcher current="dashboard" />
+            <span data-tour="switcher"><AppSwitcher current="dashboard" /></span>
 
             {/* Group 4 — primary action + user, separated by a divider */}
             <div className="flex items-center gap-1 ml-2 pl-2 border-l border-zinc-800/60">
               <button
+                data-tour="add"
                 onClick={() => setPaletteOpen(true)}
                 title="Quickly add a transaction, subscription, EMI, or any item (⌘K)"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium transition-colors shadow-lg shadow-violet-600/25 ring-1 ring-violet-400/20"
@@ -283,6 +286,7 @@ export function Dashboard() {
 
               {user && (
                 <button
+                  data-tour="avatar"
                   onClick={() => {
                     setProfileOpen(v => !v);
                     setAttentionOpen(false);
@@ -363,6 +367,9 @@ export function Dashboard() {
             <MenuItem icon={<Mail size={13} />} onClick={() => { closeAllPopovers(); navigate("/settings/email"); }}>
               Email preferences
             </MenuItem>
+            <MenuItem icon={<Sparkles size={13} />} onClick={() => { closeAllPopovers(); replayTour(user?.id); }}>
+              Replay tour
+            </MenuItem>
             <MenuItem icon={<LogOut size={13} />} onClick={logout} danger>
               Sign out
             </MenuItem>
@@ -371,7 +378,9 @@ export function Dashboard() {
       )}
 
       <div className="relative max-w-[1400px] mx-auto px-6 py-6">
-        <DashboardPulse summary={dashSummary} loading={lDash} />
+        <div data-tour="pulse">
+          <DashboardPulse summary={dashSummary} loading={lDash} />
+        </div>
 
         <RecurringSuggestionsStrip onConverted={refetchAll} />
 
@@ -389,7 +398,7 @@ export function Dashboard() {
           onDragEnd={handleDragEnd}
           onDragCancel={() => setActiveDragId(null)}
         >
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-5 items-start">
+          <div data-tour="cards" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-5 items-start">
             <DroppableColumn id="col0" className="lg:col-span-5"
               cardIds={layout.columns.col0}
               renderCard={renderCard}
@@ -438,6 +447,8 @@ export function Dashboard() {
       </div>
 
       <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} />
+
+      {tourOpen && <Onboarding userId={user?.id} onClose={dismissTour} />}
 
       <CommandPalette
         open={paletteOpen}

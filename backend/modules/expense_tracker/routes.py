@@ -157,11 +157,36 @@ def leave(tracker_id):
     return err(msg, code)
 
 
+NUDGE_DAILY_LIMIT = int(os.environ.get("NUDGE_DAILY_LIMIT", "10"))
+
+
 @bp.post("/<tracker_id>/members/<member_id>/nudge")
 def nudge_member(tracker_id, member_id):
     """Send a friendly reminder email to a member: "you owe X overall in
     this tracker, here's the link to settle". Optional `expense_id` in
-    the body focuses the nudge on one expense."""
+    the body focuses the nudge on one expense.
+
+    Rate-limited per sender to NUDGE_DAILY_LIMIT (default 10) over a
+    rolling 24h window. Without a cap a single user could spam every
+    member of every tracker repeatedly — the cap protects recipients
+    and our email reputation. Override via env for trusted accounts."""
+    # Rolling 24h window — count nudges this user has sent.
+    used_row = fetchone(
+        """
+        SELECT COUNT(*) AS n
+        FROM nudge_log
+        WHERE sender_user_id=%s AND sent_at > NOW() - INTERVAL '24 hours'
+        """,
+        (g.user_id,),
+    )
+    used = int((used_row or {}).get("n") or 0)
+    if used >= NUDGE_DAILY_LIMIT:
+        return err(
+            f"Nudge limit reached ({used}/{NUDGE_DAILY_LIMIT} in the last 24h). "
+            f"Try again later or message them directly.",
+            429,
+        )
+
     body = request.get_json(silent=True) or {}
     expense_id = body.get("expense_id")
     note = (body.get("note") or "").strip() or None
@@ -170,6 +195,18 @@ def nudge_member(tracker_id, member_id):
                                    sender_user_id=g.user_id)
     except ValueError as ex:
         return err(str(ex), 400)
+
+    # Record only when the email actually went out — don't punish users
+    # for transient SMTP failures by burning their quota.
+    if result.get("sent"):
+        from db import execute_void
+        execute_void(
+            "INSERT INTO nudge_log (sender_user_id, tracker_id, recipient_member_id) VALUES (%s,%s,%s)",
+            (g.user_id, tracker_id, member_id),
+        )
+    # Surface the remaining quota so the UI can show "3 of 10 left today".
+    result["daily_limit"] = NUDGE_DAILY_LIMIT
+    result["used_today"]  = used + (1 if result.get("sent") else 0)
     return ok(result)
 
 
@@ -657,11 +694,37 @@ def _send_nudge_email(tracker_id: str, member_id: str, *,
             (expense_id, tracker_id),
         )
 
-    # Pull this member's net balance — uses the same compute as get_tracker.
-    detail = trackers.get_tracker(tracker_id, user_id=None)
-    bal = next((b for b in (detail or {}).get("balances", [])
-                if str(b["member_id"]) == str(member_id)), None)
-    net = float((bal or {}).get("net") or 0)
+    # Compute *this* member's net balance directly in SQL — sending a
+    # nudge to one member shouldn't cost a full get_tracker fetch
+    # (members + every expense + every split + every payment + balances
+    # for everyone). One round-trip with two CTEs is enough.
+    bal_row = fetchone(
+        """
+        WITH paid AS (
+            SELECT COALESCE(SUM(
+                CASE
+                  WHEN EXISTS (SELECT 1 FROM tracker_expense_payments p WHERE p.expense_id = e.id)
+                    THEN COALESCE((SELECT SUM(p.amount)
+                                     FROM tracker_expense_payments p
+                                    WHERE p.expense_id = e.id AND p.member_id = %(mid)s), 0)
+                  WHEN e.payer_id = %(mid)s THEN e.amount
+                  ELSE 0
+                END
+            ), 0) AS amt
+            FROM tracker_expenses e
+            WHERE e.tracker_id = %(tid)s
+        ),
+        share AS (
+            SELECT COALESCE(SUM(s.share), 0) AS amt
+            FROM tracker_expense_splits s
+            JOIN tracker_expenses e ON e.id = s.expense_id
+            WHERE e.tracker_id = %(tid)s AND s.member_id = %(mid)s
+        )
+        SELECT (SELECT amt FROM paid) - (SELECT amt FROM share) AS net
+        """,
+        {"tid": tracker_id, "mid": member_id},
+    )
+    net = float((bal_row or {}).get("net") or 0)
 
     # Open-tracker URL — joined members hit /trackers/<id>; pending members
     # use their guest magic-link.

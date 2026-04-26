@@ -612,7 +612,12 @@ function DetailView({
                       if (note == null) return;
                       try {
                         const r = await api.nudgeTrackerMember(tracker.id, m.id, { note: note.trim() || undefined });
-                        if (r.sent) alert(`Nudge sent to ${r.to}.`);
+                        // Daily-quota line shown only when the cap is meaningful
+                        // (i.e. when we know the limit + how many we've used).
+                        const quota = (r.daily_limit && r.used_today)
+                          ? ` ${r.used_today}/${r.daily_limit} used today.`
+                          : "";
+                        if (r.sent) alert(`Nudge sent to ${r.to}.${quota}`);
                         else        alert(`Could not send: ${r.error || 'unknown error'}`);
                       } catch (err) { alert((err as Error).message); }
                     }}
