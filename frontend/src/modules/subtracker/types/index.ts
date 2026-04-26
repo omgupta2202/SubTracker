@@ -34,7 +34,16 @@ export interface CreditCard {
   name: string;
   bank: string;
   last4: string;
+  /** Single-number summary: unbilled + last_statement. */
   outstanding: number;
+  /** What's accumulating on the current open cycle (statement not yet issued). */
+  unbilled?: number;
+  /** What was billed on the most recent closed cycle and isn't fully paid. */
+  last_statement?: number;
+  /** ISO due date for the most recent closed-and-unpaid statement. */
+  last_statement_due_date?: string | null;
+  /** ISO statement date for the most recent closed-and-unpaid cycle. */
+  last_statement_date?: string | null;
   minimum_due: number;
   credit_limit?: number;
   due_date_offset: number;

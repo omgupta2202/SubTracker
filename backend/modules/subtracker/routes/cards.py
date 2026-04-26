@@ -31,21 +31,27 @@ def _invalidate_dashboard(user_id: str) -> None:
 
 def _to_legacy(row: dict) -> dict:
     aid = row["id"]
-    outstanding = float(ledger.get_cc_outstanding(aid))
+    br  = ledger.get_cc_breakdown(aid)
     minimum_due = float(ledger.get_cc_minimum_due(aid))
     cycle_day   = row.get("billing_cycle_day") or 1
     return {
-        "id":              aid,
-        "name":            row["name"],
-        "bank":            row.get("institution") or "",
-        "last4":           row.get("last4") or "",
-        "outstanding":     outstanding,
-        "minimum_due":     minimum_due,
-        "due_day":         cycle_day,
-        "note":            row.get("reward_program") or "",
-        "user_id":         row.get("user_id"),
-        "created_at":      row.get("created_at"),
-        "due_date_offset": days_until(int(cycle_day)),
+        "id":                       aid,
+        "name":                     row["name"],
+        "bank":                     row.get("institution") or "",
+        "last4":                    row.get("last4") or "",
+        # `outstanding` stays as the single-number summary for older
+        # surfaces; new code should prefer the breakdown.
+        "outstanding":              br["total"],
+        "unbilled":                 br["unbilled"],
+        "last_statement":           br["last_statement"],
+        "last_statement_due_date":  br["last_statement_due_date"],
+        "last_statement_date":      br["last_statement_date"],
+        "minimum_due":              minimum_due,
+        "due_day":                  cycle_day,
+        "note":                     row.get("reward_program") or "",
+        "user_id":                  row.get("user_id"),
+        "created_at":               row.get("created_at"),
+        "due_date_offset":          days_until(int(cycle_day)),
     }
 
 
@@ -170,19 +176,23 @@ def update(uid: str):
         )
 
     # Outstanding / minimum_due updates are pushed into the current open cycle.
+    # The legacy `cards` endpoint surfaces these as scalar fields for backward
+    # compat with the existing frontend; under the hood they live on
+    # billing_cycles. We pick the most recently-due open cycle (the one users
+    # are currently typing the statement number into when editing the card).
+    #
+    # An older version of this code imported `_get_current_open_cycle` from
+    # routes.billing_cycles; that helper was never extracted and the import
+    # threw at runtime. The same query lives here unconditionally now.
     if "outstanding" in body or "minimum_due" in body:
-        from modules.subtracker.routes.billing_cycles import _get_current_open_cycle  # type: ignore
-        try:
-            cycle = _get_current_open_cycle(uid, g.user_id)
-        except Exception:
-            cycle = fetchone(
-                """
-                SELECT id FROM billing_cycles
-                WHERE account_id=%s AND user_id=%s AND is_closed=FALSE AND deleted_at IS NULL
-                ORDER BY due_date DESC LIMIT 1
-                """,
-                (uid, g.user_id),
-            )
+        cycle = fetchone(
+            """
+            SELECT id FROM billing_cycles
+            WHERE account_id=%s AND user_id=%s AND is_closed=FALSE AND deleted_at IS NULL
+            ORDER BY due_date DESC LIMIT 1
+            """,
+            (uid, g.user_id),
+        )
         if cycle:
             updates = {}
             if "outstanding" in body: updates["total_billed"] = Decimal(str(body["outstanding"] or 0))

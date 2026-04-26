@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Wallet, ChevronDown, ChevronUp, CreditCard as CardIcon, Pencil } from "lucide-react";
+import { Wallet, ChevronDown, ChevronUp, ChevronRight, CreditCard as CardIcon, Pencil } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardAction, CardDivider } from "@/components/ui/Card";
 import { Stat, Row } from "@/components/ui/Stat";
 import { Sparkline } from "@/components/ui/Sparkline";
@@ -22,6 +22,11 @@ interface CreditCardSnapshot {
   bank?: string;
   last4?: string | null;
   outstanding: number;
+  /** New breakdown fields — backend now returns these alongside `outstanding`. */
+  unbilled?: number;
+  last_statement?: number;
+  last_statement_due_date?: string | null;
+  last_statement_date?: string | null;
   minimum_due: number;
   due_date_offset?: number;
   due_day?: number | null;
@@ -312,25 +317,68 @@ export function NetWorthCard({ accounts, cards, rent = 0, rentDueDay, onRefetch,
               cards.map(c => {
                 const due = c.due_date_offset ?? 999;
                 const urgent = due <= 3;
+                const billed   = c.last_statement ?? 0;
+                const unbilled = c.unbilled ?? c.outstanding;
+                const total    = c.outstanding;
+                const hasBreakdown = (c.last_statement != null || c.unbilled != null) && total > 0;
                 return (
-                  <Row
+                  <button
                     key={c.id}
+                    type="button"
                     onClick={onOpenCard ? () => onOpenCard(c) : undefined}
-                    dot="bg-red-500/60"
-                    label={
-                      <span className="flex items-center gap-1.5">
-                        <span>{c.name}</span>
-                        {c.last4 && <span className="text-[10px] text-zinc-500 num">···· {c.last4}</span>}
-                      </span>
-                    }
-                    value={`− ${inrCompact(c.outstanding)}`}
-                    valueClassName="text-red-400"
-                    helper={due <= 30 ? (
-                      <span className={cn(urgent && "text-amber-400 font-medium")}>
-                        {due === 0 ? "due today" : `${due}d`}
-                      </span>
-                    ) : null}
-                  />
+                    title={onOpenCard ? "Open statements + payment history" : undefined}
+                    className="w-full text-left -mx-2 px-2 py-2 rounded-md hover:bg-zinc-800/30 transition-colors flex items-start gap-3 group"
+                  >
+                    <span className="h-2 w-2 mt-2 rounded-full bg-red-500/60 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm text-zinc-300 flex items-center gap-1.5 truncate">
+                          {c.name}
+                          {c.last4 && <span className="text-[10px] text-zinc-500 num">···· {c.last4}</span>}
+                        </span>
+                        <span className="num text-sm tabular-nums text-red-400 shrink-0">
+                          − {inrCompact(total)}
+                        </span>
+                      </div>
+                      {/* Breakdown line: last-statement + unbilled. Only render when
+                          there's something to break down — collapsed cards (total=0)
+                          show just the row title. */}
+                      {hasBreakdown && (
+                        <div className="flex items-center justify-between gap-3 mt-0.5 text-[11px] text-zinc-500 num">
+                          <span className="flex items-center gap-3 min-w-0">
+                            {billed > 0 && (
+                              <span title="Most recent statement that's still pending payment">
+                                Last stmt <span className="text-zinc-300">{inrCompact(billed)}</span>
+                              </span>
+                            )}
+                            {unbilled > 0 && (
+                              <span title="Spend on the current cycle — statement not issued yet">
+                                Unbilled <span className="text-zinc-300">{inrCompact(unbilled)}</span>
+                              </span>
+                            )}
+                          </span>
+                          {due <= 30 && (
+                            <span className={cn(urgent && "text-amber-400 font-medium")}>
+                              {due === 0 ? "due today" : `${due}d`}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {!hasBreakdown && due <= 30 && (
+                        <div className="mt-0.5 text-[11px] text-zinc-500 text-right">
+                          <span className={cn(urgent && "text-amber-400 font-medium")}>
+                            {due === 0 ? "due today" : `${due}d`}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    {onOpenCard && (
+                      <ChevronRight
+                        size={14}
+                        className="text-zinc-600 group-hover:text-violet-300 mt-1 shrink-0 transition-colors"
+                      />
+                    )}
+                  </button>
                 );
               })
             )}

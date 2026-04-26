@@ -60,11 +60,18 @@ def list_accounts():
         params
     )
 
-    # Attach live balance
+    # Attach live balance + (for CCs) the unbilled / last-statement
+    # breakdown so the dashboard can show "₹X unbilled · ₹Y last statement"
+    # instead of a single opaque "outstanding" total.
     for row in rows:
         if row["kind"] == "credit_card":
-            row["outstanding"] = float(ledger.get_cc_outstanding(row["id"]))
-            row["minimum_due"]  = float(ledger.get_cc_minimum_due(row["id"]))
+            br = ledger.get_cc_breakdown(row["id"])
+            row["outstanding"]              = br["total"]
+            row["unbilled"]                 = br["unbilled"]
+            row["last_statement"]           = br["last_statement"]
+            row["last_statement_due_date"]  = br["last_statement_due_date"]
+            row["last_statement_date"]      = br["last_statement_date"]
+            row["minimum_due"]              = float(ledger.get_cc_minimum_due(row["id"]))
         else:
             row["balance"] = float(ledger.get_balance(row["id"]))
 

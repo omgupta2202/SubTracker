@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { DashboardSummary, SmartAllocationResponse } from "@/modules/subtracker/types";
 import type { PeriodSummary } from "@/modules/subtracker/services/api";
 import {
-  ArrowRight, AlertTriangle, CheckCircle2, Banknote, EyeOff,
+  AlertTriangle, CheckCircle2, Banknote, EyeOff,
   Calendar, Loader2, Info,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDivider } from "@/components/ui/Card";
@@ -181,7 +181,6 @@ export function CashFlowCard({
   ];
 
   const allocations = allocation?.allocations ?? [];
-  const totalSavedMonthly = allocations.reduce((s, a) => s + (a.interest_saved_monthly ?? 0), 0);
   const urgent = allocations.filter(a =>
     typeof a.days_left === "number"
       ? a.days_left <= 7
@@ -223,51 +222,6 @@ export function CashFlowCard({
             )}>
               {s.credit_utilization_pct}%
             </span>
-          </div>
-        </>
-      )}
-
-      {/* Smart pay plan — flat list, no nested boxes */}
-      {allocations.length > 0 && (
-        <>
-          <CardDivider />
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500">
-              Smart pay plan
-            </span>
-            {totalSavedMonthly > 0 && (
-              <span className="text-[10px] num text-emerald-400">
-                save ~{inrCompact(totalSavedMonthly)}/mo interest
-              </span>
-            )}
-          </div>
-          <div className="flex flex-col">
-            {allocations.slice(0, 5).map((a, i) => {
-              const days = a.days_left ?? Math.ceil((new Date(a.due_date).getTime() - Date.now()) / 86_400_000);
-              const urgentTone = days <= 3 ? "text-red-400" : days <= 7 ? "text-amber-400" : "text-zinc-500";
-              return (
-                <div key={i} className="flex items-center gap-2 py-1.5">
-                  <span className={cn("h-1.5 w-1.5 rounded-full shrink-0",
-                    days <= 3 ? "bg-red-500" : days <= 7 ? "bg-amber-500" : "bg-zinc-600",
-                  )} />
-                  <span className="text-sm text-zinc-300 flex-1 truncate">
-                    {a.card_name ?? a.card ?? "Card"}
-                  </span>
-                  <span className="text-[11px] text-zinc-600 hidden md:inline-flex items-center gap-1">
-                    {a.from_account_name ?? a.pay_from ?? "—"} <ArrowRight size={9} />
-                  </span>
-                  <span className={cn("text-[11px] num shrink-0 w-12 text-right", urgentTone)}>
-                    {days <= 0 ? "today" : `${days}d`}
-                  </span>
-                  <span className="num text-sm text-zinc-100 shrink-0 w-20 text-right">
-                    {inrCompact(a.allocatable ?? a.amount ?? 0)}
-                  </span>
-                </div>
-              );
-            })}
-            {allocations.length > 5 && (
-              <span className="text-[11px] text-zinc-600 mt-1">+{allocations.length - 5} more cards</span>
-            )}
           </div>
         </>
       )}

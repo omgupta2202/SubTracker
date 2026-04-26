@@ -111,6 +111,50 @@ def get_cc_minimum_due(account_id: str) -> Decimal:
     return Decimal(str(row["min_due"]))
 
 
+def get_cc_breakdown(account_id: str) -> dict:
+    """Per-card outstanding split into the three numbers users actually
+    care about: this-month spend (unbilled), last issued statement
+    (billed), and the total of those two.
+
+    - unbilled                = current open cycle's balance_due
+                                (statement not issued yet; you spent this
+                                between the last statement date and today)
+    - last_statement          = most recently closed cycle's balance_due
+                                (issued, with a due date; pay this to
+                                avoid interest)
+    - last_statement_due_date = that cycle's due_date, ISO
+    - total                   = unbilled + last_statement
+    """
+    unbilled_row = fetchone(
+        """
+        SELECT COALESCE(SUM(balance_due), 0) AS amt
+        FROM billing_cycles
+        WHERE account_id=%s AND is_closed=FALSE AND deleted_at IS NULL
+        """,
+        (account_id,),
+    )
+    last_row = fetchone(
+        """
+        SELECT balance_due, due_date, statement_date
+        FROM billing_cycles
+        WHERE account_id=%s AND is_closed=TRUE AND deleted_at IS NULL
+          AND balance_due > 0
+        ORDER BY statement_date DESC
+        LIMIT 1
+        """,
+        (account_id,),
+    )
+    unbilled = Decimal(str((unbilled_row or {}).get("amt") or 0))
+    last_amt = Decimal(str((last_row or {}).get("balance_due") or 0))
+    return {
+        "unbilled":                float(unbilled),
+        "last_statement":          float(last_amt),
+        "last_statement_due_date": (last_row or {}).get("due_date").isoformat() if last_row and last_row.get("due_date") else None,
+        "last_statement_date":     (last_row or {}).get("statement_date").isoformat() if last_row and last_row.get("statement_date") else None,
+        "total":                   float(unbilled + last_amt),
+    }
+
+
 def get_user_total_liquid(user_id: str) -> Decimal:
     """
     Sum of current balances across all active bank/wallet/cash accounts.
